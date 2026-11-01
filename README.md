@@ -77,35 +77,62 @@ reasoning chars per turn) suggest the router would help more there, but there is
 
 ## 🚀 Quick start
 
+You need Hermes, [uv](https://docs.astral.sh/uv/), and an NVIDIA GPU (a CPU works too, see [docs/install.md](docs/install.md)).
+
+**1. Get this repo, Jeff, and the weights**
+
 ```sh
-# 1. Jeff + weights (GPU)
+git clone https://github.com/chadcox/jeff-hermes && cd jeff-hermes
 git clone https://github.com/firelex/jeff vendor/jeff
 UV="uvx --from uv>=0.12.19 uv"
 $UV venv -p 3.12 .venv-gpu && VIRTUAL_ENV=$PWD/.venv-gpu $UV pip install -e 'vendor/jeff[lora,cuda]'
 .venv-gpu/bin/hf download mstrasser/jeff-base --revision v1.3 --local-dir models/jeff-base-v1.3
 .venv-gpu/bin/hf download mstrasser/jeff-adapter-code-router --revision v1.3 --local-dir models/adapters/code-router
+```
 
-# 2. Serve it
+**2. Start jeff-serve** (leave it running in its own terminal, or use the systemd unit in [docs/install.md](docs/install.md))
+
+```sh
 JEFF_DEVICE=cuda JEFF_CHECKPOINT=models/jeff-base-v1.3 JEFF_ADAPTERS=models/adapters PORT=8765 \
   .venv-gpu/bin/jeff-serve
+curl -s 127.0.0.1:8765/health    # in another terminal: {"status": "ready", ...}
+```
 
-# 3. Plug into Hermes
+**3. Install the plugin in Hermes**
+
+Link the plugin into Hermes's plugin folder:
+
+```sh
 ln -s "$PWD/plugin/jeff_router" ~/.hermes/plugins/jeff_router
 ```
 
+Then edit `~/.hermes/config.yaml`. Add `jeff_router` to `plugins.enabled` (keep any plugins already listed there) and
+turn the router on:
+
 ```yaml
-# ~/.hermes/config.yaml
 plugins:
-  enabled: [jeff_router]
+  enabled:
+    - jeff_router          # plus your existing plugins
   entries:
     jeff_router:
       settings:
         thinking_router: true
 ```
 
-Restart Hermes (including the gateway, if you use it), and the router is live. The full guide is in
-**[docs/install.md](docs/install.md)**. It covers CPU setup, the systemd unit, and how to check it's working, and it
-has the exact package and weight versions to use.
+Without `thinking_router: true` the plugin runs in shadow mode: it asks Jeff and logs the answer, but changes nothing.
+Every setting is described in [docs/configuration.md](docs/configuration.md).
+
+**4. Restart Hermes and check it**
+
+Plugins load at startup, so restart Hermes, including the gateway if you run one (for example
+`systemctl --user restart hermes-gateway.service`). Run any coding turn, then look at the newest log record:
+
+```sh
+tail -n1 ~/.hermes/plugin-data/agent-plugin-jeff_router-*/shadow.jsonl | python3 -m json.tool
+```
+
+`router.level` is `"off"` or `"xhigh"` (Jeff's choice), and `strata_thinking` says whether the call actually
+thought. The full guide, with CPU setup, the systemd unit and exact versions, is **[docs/install.md](docs/install.md)**.
 
 ## 📚 Documentation
 
