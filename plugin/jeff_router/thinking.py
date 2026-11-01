@@ -1,4 +1,4 @@
-"""Jeff-Code's thinking router, ported: before each Strata call, Jeff's code-router adapter is asked how hard the
+"""Jeff-Code's thinking router, ported: before each main-model call, Jeff's code-router adapter is asked how hard the
 coding model should think, and the call runs with thinking off unless P(xhigh) >= threshold (Jeff-Code's
 jeff-off-unless rule, packages/coding-agent/src/core/jeff-first/thinking.ts).
 

@@ -10,11 +10,13 @@ DEFAULTS: dict[str, Any] = {
     "timeout_s": 2.0,
     "max_request_chars": 24000,
     "log_max_mb": 50,
-    "strata_thinking": True,
+    "main_thinking": True,
     "thinking_router": False,
     "router_adapter": "code-router",
     "router_threshold": 0.6,
 }
+
+_UNSET = object()
 
 
 def _valid(default: Any, value: Any) -> bool:
@@ -33,7 +35,11 @@ def read_settings(get_config: Callable[[str, Any], Any]) -> dict[str, Any]:
     settings: dict[str, Any] = {}
     for key, default in DEFAULTS.items():
         try:
-            value = get_config(key, default)
+            value = get_config(key, _UNSET)
+            if value is _UNSET and key == "main_thinking":  # v0.1 name
+                value = get_config("strata_thinking", _UNSET)
+            if value is _UNSET:
+                value = default
         except Exception:
             value = default
         settings[key] = value if _valid(default, value) else default

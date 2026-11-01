@@ -26,7 +26,7 @@ config_schema:
     type: int
     default: 50
     description: Rotate shadow.jsonl to shadow.jsonl.1 above this size in megabytes.
-  strata_thinking:
+  main_thinking:
     type: bool
     default: true
     description: "false: send reasoning_effort none on main-turn chat_completions calls (any provider), so the model answers without thinking."

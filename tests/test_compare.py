@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace as NS
 
 from jeff_router_under_test.compare import (
-    MAX_ARGUMENT_CHARS, logged_action, pick, read_match, strata_action, tool_match,
+    MAX_ARGUMENT_CHARS, logged_action, pick, read_match, main_action, tool_match,
 )
 
 
@@ -14,25 +14,25 @@ def response(content=None, calls=None):
 
 
 def test_text_response():
-    assert strata_action(response(content="hello")) == {"kind": "text"}
+    assert main_action(response(content="hello")) == {"kind": "text"}
 
 
 def test_tool_response_first_call_parsed():
-    action = strata_action(response(calls=[("read_file", json.dumps({"path": "/a"})), ("terminal", "{}")]))
+    action = main_action(response(calls=[("read_file", json.dumps({"path": "/a"})), ("terminal", "{}")]))
     assert action == {"kind": "tool", "tools": ["read_file", "terminal"],
                       "first": {"name": "read_file", "arguments": {"path": "/a"}}}
 
 
 def test_dict_shaped_response_and_bad_arguments():
     raw = {"choices": [{"message": {"tool_calls": [{"function": {"name": "x", "arguments": "not json"}}]}}]}
-    assert strata_action(raw) == {"kind": "tool", "tools": ["x"], "first": {"name": "x",
+    assert main_action(raw) == {"kind": "tool", "tools": ["x"], "first": {"name": "x",
                                                                             "arguments": {"_raw": "not json"}}}
 
 
 def test_comparisons_see_uncapped_arguments_and_only_the_logged_copy_is_capped():
     big = "x" * 5000
     arguments = {"path": "/a", "content": big, "edits": [{"old": big, "n": 3}], "flag": True}
-    action = strata_action(response(calls=[("write_file", json.dumps(arguments))]))
+    action = main_action(response(calls=[("write_file", json.dumps(arguments))]))
     assert action["first"]["arguments"] == arguments
     capped = "x" * MAX_ARGUMENT_CHARS + "…"
     assert MAX_ARGUMENT_CHARS == 2000
@@ -42,20 +42,20 @@ def test_comparisons_see_uncapped_arguments_and_only_the_logged_copy_is_capped()
     assert logged["kind"] == "tool" and logged["tools"] == ["write_file"] and logged["first"]["name"] == "write_file"
     assert action["first"]["arguments"]["content"] == big  # the logged copy does not change the action
     raw = {"choices": [{"message": {"tool_calls": [{"function": {"name": "w", "arguments": arguments}}]}}]}
-    assert logged_action(strata_action(raw))["first"]["arguments"]["content"] == capped
+    assert logged_action(main_action(raw))["first"]["arguments"]["content"] == capped
     assert arguments["content"] == big  # dict-form arguments are not changed in place
     assert logged_action({"kind": "text"}) == {"kind": "text"} and logged_action(None) is None
 
 
 def test_read_match_on_a_path_longer_than_the_log_cap():
     path = "/" + "p" * 2499
-    action = strata_action(response(calls=[("read_file", json.dumps({"path": path}))]))
+    action = main_action(response(calls=[("read_file", json.dumps({"path": path}))]))
     assert read_match("r1", {"r1": path}, action, "/") is True
 
 
 def test_missing_choices():
-    assert strata_action(NS(choices=[])) is None
-    assert strata_action(None) is None
+    assert main_action(NS(choices=[])) is None
+    assert main_action(None) is None
 
 
 def test_pick_is_argmax():

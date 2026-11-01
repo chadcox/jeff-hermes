@@ -7,14 +7,14 @@ def test_defaults_when_nothing_configured():
 
 def test_valid_values_are_used():
     given = {"enabled": False, "url": "http://127.0.0.1:9999", "timeout_s": 1.5, "max_request_chars": 12000,
-             "log_max_mb": 5, "strata_thinking": False, "thinking_router": True, "router_adapter": "r",
+             "log_max_mb": 5, "main_thinking": False, "thinking_router": True, "router_adapter": "r",
              "router_threshold": 0.7}
     assert read_settings(lambda key, default: given.get(key, default)) == given
 
 
 def test_invalid_values_fall_back_to_defaults():
     given = {"enabled": "yes", "url": "", "timeout_s": -1, "max_request_chars": 0, "log_max_mb": None,
-             "strata_thinking": "off"}
+             "main_thinking": "off"}
     assert read_settings(lambda key, default: given.get(key, default)) == DEFAULTS
 
 
@@ -44,3 +44,9 @@ def test_get_config_errors_fall_back_to_defaults():
 
 def test_router_threshold_above_one_falls_back():
     assert read_settings(lambda key, default: 1.5 if key == "router_threshold" else default)["router_threshold"] == 0.6
+
+
+def test_v0_1_strata_thinking_name_still_works():
+    assert read_settings(lambda key, default: {"strata_thinking": False}.get(key, default))["main_thinking"] is False
+    both = {"strata_thinking": False, "main_thinking": True}
+    assert read_settings(lambda key, default: both.get(key, default))["main_thinking"] is True

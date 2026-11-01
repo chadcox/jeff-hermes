@@ -102,7 +102,7 @@ Run a turn, then look at the newest log record:
 tail -n1 ~/.hermes/plugin-data/agent-plugin-jeff_router-*/shadow.jsonl | python3 -m json.tool
 ```
 
-`router.level` is `"off"` or `"xhigh"`, and `strata_thinking` says whether the call actually thought.
+`router.level` is `"off"` or `"xhigh"`, and `main_thinking` says whether the call actually thought.
 
 ## Tests
 

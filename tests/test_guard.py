@@ -5,7 +5,7 @@ from jeff_router_under_test.guard import (
     compare_texts, dice, failed_commands, find_runaway, first_runaway, repeated_action, shell_file_writes,
     stuck_outputs,
 )
-from test_middleware import CONTEXT, HI, NextCall, make_routed, router_reply, strata_text, wait_records
+from test_middleware import CONTEXT, HI, NextCall, make_routed, router_reply, main_text, wait_records
 
 
 def call(call_id, name, args):
@@ -129,32 +129,32 @@ def test_failed_commands_force_thinking_despite_router_off(fake_jeff, tmp_path):
     router, log = make_routed(fake_jeff.url, tmp_path)
     fails = [step(f"c{i}", "terminal", {"command": "make"}, "error", 1) for i in range(2)]
     request = {"messages": history(*fails), "tools": HI["tools"]}
-    nxt = NextCall(strata_text())
-    router(request=request, next_call=nxt, provider="strata", **CONTEXT)
+    nxt = NextCall(main_text())
+    router(request=request, next_call=nxt, provider="local", **CONTEXT)
     assert nxt.calls == [((), {})]
     rec = wait_records(log, 1)[0]
-    assert rec["strata_thinking"] is True and rec["guard"]["forced"][0]["rule"] == "failed_commands"
+    assert rec["main_thinking"] is True and rec["guard"]["forced"][0]["rule"] == "failed_commands"
 
 
 def test_loop_with_thinking_off_is_reasked_with_thinking(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(0.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
     request = {"messages": history(step("c1", "read_file", {"path": "a.py"})), "tools": HI["tools"]}
-    second = strata_text()
+    second = main_text()
     nxt = Replies(reply_calls(call("n1", "read_file", {"path": "a.py"})), second)
-    assert router(request=request, next_call=nxt, provider="strata", **CONTEXT) is second
+    assert router(request=request, next_call=nxt, provider="local", **CONTEXT) is second
     assert [c[0] for c in nxt.calls] == [({**request, "reasoning_effort": "none"},), ()]
     rec = wait_records(log, 1)[0]
-    assert rec["strata_thinking"] is True
+    assert rec["main_thinking"] is True
     assert rec["guard"]["trigger"]["trigger"] == "loop" and rec["guard"]["reask_runaway"] is None
 
 
 def test_runaway_is_reasked_even_when_thinking(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(1.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
-    second = strata_text()
+    second = main_text()
     nxt = Replies(reply_text("z" * 20000 + "round and round we go " * 40), second)
-    assert router(request=HI, next_call=nxt, provider="strata", **CONTEXT) is second
+    assert router(request=HI, next_call=nxt, provider="local", **CONTEXT) is second
     assert len(nxt.calls) == 2
     rec = wait_records(log, 1)[0]
     assert rec["guard"]["trigger"]["trigger"] == "runaway" and rec["guard"]["trigger"]["where"] == "text"
@@ -163,7 +163,7 @@ def test_runaway_is_reasked_even_when_thinking(fake_jeff, tmp_path):
 def test_no_trigger_means_one_call_and_no_guard(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(0.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
-    nxt = NextCall(strata_text())
-    router(request=HI, next_call=nxt, provider="strata", **CONTEXT)
+    nxt = NextCall(main_text())
+    router(request=HI, next_call=nxt, provider="local", **CONTEXT)
     assert len(nxt.calls) == 1
     assert wait_records(log, 1)[0]["guard"] is None

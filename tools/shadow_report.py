@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Summarize jeff_router shadow logs: how often Jeff agreed with Strata's actual next action, by threshold.
+"""Summarize jeff_router shadow logs: how often Jeff agreed with the main model's actual next action, by threshold.
 
-Strata's action is a reference, not ground truth, so the report speaks of agreement, never accuracy. Jeff's
-answer_directly and ask_user both count as agreeing with any Strata text reply.
+The main model's action is a reference, not ground truth, so the report speaks of agreement, never accuracy. Jeff's
+answer_directly and ask_user both count as agreeing with any text reply from the main model.
 
 Usage: python tools/shadow_report.py [path ...]
 With no paths it finds jeff_router's data dir, Hermes' namespaced plugin data dir
@@ -47,6 +47,9 @@ def _parse(data: bytes) -> list[dict]:
         except ValueError:
             continue
         if isinstance(record, dict):
+            for old in ("strata", "strata_cost", "strata_thinking"):  # older logs used strata* names
+                if old in record:
+                    record.setdefault(old.replace("strata", "main"), record.pop(old))
             records.append(record)
     return records
 
@@ -122,13 +125,13 @@ def summarize(records: list[dict]) -> str:
     ms = [r["jeff_ms"] for r in records
           if r.get("outcome") == "ok" and isinstance(r.get("jeff_ms"), (int, float))]
     ok = [r for r in records if r.get("outcome") == "ok" and r.get("tool")]
-    kinds = Counter((r.get("strata") or {}).get("kind") for r in records if r.get("strata"))
+    kinds = Counter((r.get("main") or {}).get("kind") for r in records if r.get("main"))
     lines += ["", f"Jeff latency (ok): p50 {_percentile(ms, 0.5)} ms, p95 {_percentile(ms, 0.95)} ms. "
-              f"Strata actions: tool {kinds.get('tool', 0)}, text {kinds.get('text', 0)}.", ""]
+              f"Main-model actions: tool {kinds.get('tool', 0)}, text {kinds.get('text', 0)}.", ""]
 
-    lines += ["## Tool choice: agreement with Strata", "",
+    lines += ["## Tool choice: agreement with the main model", "",
               f"Coverage is the share of all {len(ok)} ok records with tool.p ≥ threshold. Agreement is tool_match "
-              "among the covered records that could be compared with Strata (count in brackets).", "",
+              "among the covered records that could be compared with the main model (count in brackets).", "",
               "| threshold | coverage | agreement (comparable) | read-only coverage | read-only agreement (comparable) |",
               "|---:|---:|---:|---:|---:|"]
     for t in THRESHOLDS:
@@ -142,8 +145,8 @@ def summarize(records: list[dict]) -> str:
     lines += ["", "## Full read_file call and calls that could be skipped", "",
               "Records where Jeff picked read_file with tool.p ≥ t (rows) and a read_target candidate rK with "
               "read_target.p ≥ t2 (columns). Each cell is answered / match / mismatch: answered is how many calls Jeff "
-              "would have answered locally, match and mismatch compare its call with Strata's first call (a text "
-              "answer or another tool is a mismatch), and the rest of answered are undecided (Strata called "
+              "would have answered locally, match and mismatch compare its call with the main model's first call (a text "
+              "answer or another tool is a mismatch), and the rest of answered are undecided (the main model called "
               "read_file with a path that could not be resolved, or its action could not be read).", "",
               "| t \\ t2 | " + " | ".join(str(t2) for t2 in THRESHOLDS) + " |",
               "|---:|" + "---:|" * len(THRESHOLDS)]
@@ -156,8 +159,8 @@ def summarize(records: list[dict]) -> str:
                              or (r.get("read_match") is None and r.get("tool_match") is False))
             cells.append(f"{len(covered)} / {matched} / {mismatched}")
         lines.append(f"| {t} | " + " | ".join(cells) + " |")
-    lines += ["", f"Strata actions in the log: {sum(kinds.values())}. A match is a call Jeff could have answered "
-              "the way Strata did. Mismatches are not necessarily Jeff errors: review a sample of high-confidence "
+    lines += ["", f"Main-model actions in the log: {sum(kinds.values())}. A match is a call Jeff could have answered "
+              "the way the main model did. Mismatches are not necessarily Jeff errors: review a sample of high-confidence "
               "mismatches by hand before trusting any threshold."]
     return "\n".join(lines)
 

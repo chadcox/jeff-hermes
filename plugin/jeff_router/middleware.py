@@ -1,4 +1,4 @@
-"""llm_execution middleware: ask Jeff in the background, pass the call to Strata unchanged, log both.
+"""llm_execution middleware: ask Jeff in the background, pass the call to the main model unchanged, log both.
 
 The agent thread never waits for Jeff: the record is appended from the Jeff future's done-callback. At most `slots`
 Jeff requests are in flight per router; a call that finds no free slot is logged as local_busy instead of queueing."""
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .compare import _get, logged_action, pick, read_match, strata_action, strata_cost, tool_match
+from .compare import _get, logged_action, main_action, main_cost, pick, read_match, tool_match
 from .guard import failed_commands, first_runaway, repeated_action, stuck_outputs
 from .jeff_client import JeffClient, JeffResult
 from .options import (
@@ -36,7 +36,7 @@ class _Pending:
     state: dict[str, Any] | None = None
     future: Future | None = None
     cost: dict[str, Any] | None = None
-    strata_thinking: bool = True
+    main_thinking: bool = True
     router: dict[str, Any] | None = None
     guard: dict[str, Any] | None = None
 
@@ -48,10 +48,10 @@ def _first_choice(response: Any) -> Any:
 
 class ShadowRouter:
     def __init__(self, *, client: JeffClient, log: ShadowLog, cwd: Callable[[], str], max_request_chars: int,
-                 slots: int = 2, strata_thinking: bool = True, thinking_router: bool = False,
+                 slots: int = 2, main_thinking: bool = True, thinking_router: bool = False,
                  router_adapter: str = "code-router", router_threshold: float = 0.6) -> None:
         self._client = client
-        self._strata_thinking = strata_thinking
+        self._main_thinking = main_thinking
         self._thinking_router = thinking_router
         self._router_adapter = router_adapter
         self._router_threshold = router_threshold
@@ -67,7 +67,7 @@ class ShadowRouter:
         if self._closed or not self._gated(request, context):
             self._note_skipped_api_mode(context.get("api_mode"))
             return next_call()
-        routed = self._strata_thinking and self._thinking_router
+        routed = self._main_thinking and self._thinking_router
         router = self._route(request) if routed else None
         pending = self._start(request)
         pending.router = router
@@ -75,7 +75,7 @@ class ShadowRouter:
         forced = self._forced(messages) if routed else []
         if forced:
             pending.guard = {"forced": forced}
-        thinking = self._strata_thinking and (bool(forced) or router is None or router["level"] != "off")
+        thinking = self._main_thinking and (bool(forced) or router is None or router["level"] != "off")
         started = time.monotonic()
         response = self._call(request, next_call, thinking)
         trigger = self._trigger(messages, response, thinking) if routed else None
@@ -88,7 +88,7 @@ class ShadowRouter:
             started = time.monotonic()
             response = self._call(request, next_call, thinking)
             pending.guard["reask_runaway"] = self._runaway(response)
-        pending.strata_thinking = thinking
+        pending.main_thinking = thinking
         self._finish(pending, request, response, round((time.monotonic() - started) * 1000), context)
         if not thinking and pending.cost is not None and pending.cost["reasoning_chars"] > 0:
             self._note_once(f"leak:{context.get('provider')}:{context.get('model')}",
@@ -109,7 +109,7 @@ class ShadowRouter:
 
     @staticmethod
     def _call(request: dict[str, Any], next_call: Any, thinking: bool) -> Any:
-        # Strata (llama.cpp) honours reasoning_effort "none"; it ignores extra_body.reasoning.enabled
+        # llama.cpp honours reasoning_effort "none"; it ignores extra_body.reasoning.enabled
         return next_call() if thinking else next_call({**request, "reasoning_effort": "none"})
 
     def _forced(self, messages: list[Any]) -> list[dict[str, Any]]:
@@ -151,7 +151,7 @@ class ShadowRouter:
 
     def _safe_cost(self, request: Any, response: Any, ms: int) -> dict[str, Any] | None:
         try:
-            return strata_cost(request, response, ms)
+            return main_cost(request, response, ms)
         except Exception as error:
             self._warn("cost", error)
             return None
@@ -214,7 +214,7 @@ class ShadowRouter:
             return _Pending(outcome="build_error")
 
     def _ask(self, body: dict[str, Any]) -> JeffResult:
-        """Pool thread. The slot covers only the Jeff HTTP call: holding it through Strata's round trip would turn
+        """Pool thread. The slot covers only the Jeff HTTP call: holding it through the main model's round trip would turn
         concurrent gateway turns into local_busy while Jeff sits idle. Logging afterwards never queues work, because
         the only lock it can meet is another writer's single append (the report reads without locking)."""
         try:
@@ -222,15 +222,15 @@ class ShadowRouter:
         finally:
             self._slots.release()
 
-    def _finish(self, pending: _Pending, request: Any, response: Any, strata_ms: int,
+    def _finish(self, pending: _Pending, request: Any, response: Any, main_ms: int,
                 context: dict[str, Any]) -> None:
-        """Runs on the agent thread after Strata answered. Never waits for Jeff, never raises."""
+        """Runs on the agent thread after the main model answered. Never waits for Jeff, never raises."""
         try:
-            pending.cost = strata_cost(request, response, strata_ms)
+            pending.cost = main_cost(request, response, main_ms)
         except Exception as error:
             self._warn("cost", error)
         try:
-            action = strata_action(response)
+            action = main_action(response)
         except Exception as error:
             self._warn("finish", error)
             action = None
@@ -284,8 +284,8 @@ class ShadowRouter:
             "api_request_id": context.get("api_request_id"), "api_call_count": context.get("api_call_count"),
             "model": context.get("model"), "outcome": outcome,
             "jeff_ms": result.ms if result else None, "input_tokens": result.input_tokens if ok else None,
-            "tool": tool_block, "read_target": read_block, "strata": logged_action(action),
-            "strata_cost": pending.cost, "strata_thinking": pending.strata_thinking,
+            "tool": tool_block, "read_target": read_block, "main": logged_action(action),
+            "main_cost": pending.cost, "main_thinking": pending.main_thinking,
             "router": pending.router, "guard": pending.guard,
             "tool_match": tool_ok, "read_match": read_ok, "state": pending.state,
         }

@@ -13,7 +13,7 @@ def rec(outcome="ok", pick="t1", p=0.9, name="read_file", match=True, read=None,
     tool = None if outcome != "ok" else {"pick": pick, "p": p, "names": {"t1": name, "t2": "terminal"}}
     return {"outcome": outcome, "jeff_ms": ms, "tool": tool, "read_target": read,
             "tool_match": match if outcome == "ok" else None,
-            "read_match": None if read is None else read.pop("_match"), "strata": {"kind": kind}}
+            "read_match": None if read is None else read.pop("_match"), "main": {"kind": kind}}
 
 
 def test_load_skips_bad_lines(tmp_path):
@@ -34,14 +34,14 @@ def test_summary_counts_and_threshold_rows():
     text = report.summarize(records)
     assert "| records | 6 |" in text
     assert "| busy | 1 | 16.7% |" in text
-    # t=0.9: 3 of 5 ok records covered, all three comparable and agreeing with Strata; all picks are read_file
+    # t=0.9: 3 of 5 ok records covered, all three comparable and agreeing with the main model; all picks are read_file
     assert "| 0.9 | 60.0% (3) | 100.0% (3) | 60.0% (3) | 100.0% (3) |" in text
     # t=0.7: 4 covered, 4 comparable, 3 agree
     assert "| 0.7 | 80.0% (4) | 75.0% (4) |" in text
     # full read_file call, t=0.5 row: both read records up to t2=0.5 (one match, one mismatch), then only the p=0.9 one
     assert "| 0.5 | 2 / 1 / 1 | 2 / 1 / 1 | 2 / 1 / 1 | 1 / 1 / 0 | 1 / 1 / 0 | 1 / 1 / 0 | 1 / 1 / 0 |" in text
-    assert "Strata actions in the log: 6." in text
-    assert "accuracy" not in text and "correct" not in text  # Strata is a reference, not ground truth
+    assert "Main-model actions in the log: 6." in text
+    assert "accuracy" not in text and "correct" not in text  # the main model is a reference, not ground truth
 
 
 def test_undecidable_records_count_as_covered_but_not_compared():
@@ -57,8 +57,8 @@ def test_undecidable_records_count_as_covered_but_not_compared():
     assert "| 0.9 | " + " | ".join(["2 / 1 / 0"] * 7) + " |" in text
 
 
-def test_read_file_pick_against_a_different_strata_action_is_a_mismatch():
-    # Jeff would call read_file on r1; Strata answered in text, so read_match is None but tool_match is False
+def test_read_file_pick_against_a_different_main_action_is_a_mismatch():
+    # Jeff would call read_file on r1; the main model answered in text, so read_match is None but tool_match is False
     records = [rec(p=0.95, match=False, kind="text", read={"pick": "r1", "p": 0.9, "_match": None})]
     text = report.summarize(records)
     assert "| 0.9 | " + " | ".join(["1 / 0 / 1"] * 7) + " |" in text

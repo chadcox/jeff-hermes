@@ -1,4 +1,4 @@
-"""Strata's actual next action, and whether Jeff's picks agree with it."""
+"""The main model's actual next action, and whether Jeff's picks agree with it."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from typing import Any
 
 from .options import normalize_path
 
-MAX_ARGUMENT_CHARS = 2000  # per string value in the logged copy of Strata's call; write_file can carry a whole file
+MAX_ARGUMENT_CHARS = 2000  # per string value in the logged copy of the main model's call; write_file can carry a whole file
 
 
 def _cap(value: Any) -> Any:
@@ -36,8 +36,8 @@ def _arguments(raw: Any) -> dict[str, Any]:
     return {}
 
 
-def strata_action(response: Any) -> dict[str, Any] | None:
-    """Strata's next action with its first call's arguments intact; compare on this, log logged_action() of it."""
+def main_action(response: Any) -> dict[str, Any] | None:
+    """The main model's next action with its first call's arguments intact; compare on this, log logged_action() of it."""
     choices = _get(response, "choices") if response is not None else None
     if not choices:
         return None
@@ -51,9 +51,9 @@ def strata_action(response: Any) -> dict[str, Any] | None:
             "first": {"name": names[0], "arguments": _arguments(_get(first_function, "arguments"))}}
 
 
-def strata_cost(request: Any, response: Any, ms: int) -> dict[str, Any]:
-    """What Strata's answer cost: wall time, the reasoning setting sent, token usage, and the size of the reasoning
-    and content text. Strata's usage has no reasoning-token count, so character counts stand in for the split."""
+def main_cost(request: Any, response: Any, ms: int) -> dict[str, Any]:
+    """What the main model's answer cost: wall time, the reasoning setting sent, token usage, and the size of the reasoning
+    and content text. The main model's usage has no reasoning-token count, so character counts stand in for the split."""
     choices = _get(response, "choices") if response is not None else None
     choice = choices[0] if choices else None
     message = _get(choice, "message")
@@ -69,7 +69,7 @@ def strata_cost(request: Any, response: Any, ms: int) -> dict[str, Any]:
 
 
 def logged_action(action: dict[str, Any] | None) -> dict[str, Any] | None:
-    """The copy of a strata_action() result written to the log: first-call argument strings capped."""
+    """The copy of a main_action() result written to the log: first-call argument strings capped."""
     if action is None or action["kind"] != "tool":
         return action
     return {**action, "first": {**action["first"], "arguments": _cap(action["first"]["arguments"])}}

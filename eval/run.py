@@ -15,8 +15,8 @@ HERMES = Path.home() / ".hermes/hermes-agent/venv/bin/hermes"
 TIMEOUT = 2400
 MODES = {
     "router": "    jeff_router:\n      settings:\n        thinking_router: true\n        router_threshold: {thr}\n",
-    "on":     "    jeff_router:\n      settings:\n        thinking_router: false\n        strata_thinking: true\n",
-    "off":    "    jeff_router:\n      settings:\n        thinking_router: false\n        strata_thinking: false\n",
+    "on":     "    jeff_router:\n      settings:\n        thinking_router: false\n        main_thinking: true\n",
+    "off":    "    jeff_router:\n      settings:\n        thinking_router: false\n        main_thinking: false\n",
 }
 FIX = "Run them with 'python3 -m unittest', find the root cause of each failure, and fix the code in {pkg}/. Do not edit the tests and do not hard-code expected values. Re-run until all tests pass, then explain each root cause in one sentence."
 SPEC = "Implement SPEC.md in this directory. Write your own tests for the edge cases in the spec and run them until they pass. Reply with a one-paragraph summary."

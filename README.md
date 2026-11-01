@@ -131,7 +131,7 @@ Plugins load at startup, so restart Hermes, including the gateway if you run one
 tail -n1 ~/.hermes/plugin-data/agent-plugin-jeff_router-*/shadow.jsonl | python3 -m json.tool
 ```
 
-`router.level` is `"off"` or `"xhigh"` (Jeff's choice), and `strata_thinking` says whether the call actually
+`router.level` is `"off"` or `"xhigh"` (Jeff's choice), and `main_thinking` says whether the call actually
 thought. The full guide, with CPU setup, the systemd unit and exact versions, is **[docs/install.md](docs/install.md)**.
 
 ## 📚 Documentation

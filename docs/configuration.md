@@ -13,16 +13,15 @@ restart Hermes. An invalid value falls back to its default.
 | `thinking_router` | `false` | **The main feature.** Asks Jeff before each main-turn call whether to think. |
 | `router_adapter` | `code-router` | The jeff-serve adapter that answers the thinking question. |
 | `router_threshold` | `0.6` | The call thinks when Jeff's P(xhigh) is at least this value (0 to 1). Jeff-Code's evaluated setting is 0.6. |
-| `strata_thinking` | `true` | `false` turns thinking off on every main-turn call and overrides the router. |
+| `main_thinking` | `true` | `false` turns thinking off on every main-turn call and overrides the router. |
 
-"Strata" is the name of the main model in the author's setup. In this plugin it means whichever model Hermes is
-driving.
+`strata_thinking`, the v0.1 name for `main_thinking`, is still read when `main_thinking` is not set.
 
 ## Choosing a threshold
 
 A lower threshold makes the main model think on more calls, which costs more but is safer. A higher threshold makes
 it think on fewer calls. The loop guard and runaway guard (see [how-it-works.md](how-it-works.md)) catch the worst
-cases of thinking too little. To compare thresholds, see what fraction of calls thought (the `strata_thinking` field)
+cases of thinking too little. To compare thresholds, see what fraction of calls thought (the `main_thinking` field)
 and whether the tasks still succeeded.
 
 ## Supported providers
@@ -54,9 +53,9 @@ The log has one JSON line per main-turn call. Its fields include:
 - `router`: the level Jeff chose (`off` / `xhigh`), the outcome, the probabilities, and how long Jeff took.
 - `guard`: whether thinking was forced (by stuck outputs or failed commands), or the reply was discarded and the call
   re-asked (runaway or loop).
-- `strata_thinking`: whether the call that was kept actually thought.
-- `strata_cost`: wall time, token usage, and reasoning and content character counts.
-- `jeff` / `strata`: Jeff's predicted next tool beside the tool the main model actually called (shadow comparison).
+- `main_thinking`: whether the call that was kept actually thought.
+- `main_cost`: wall time, token usage, and reasoning and content character counts.
+- `jeff` / `main`: Jeff's predicted next tool beside the tool the main model actually called (shadow comparison).
 
 The log contains file paths and snippets of your transcripts, so it is created owner-only (`0600`). String values in
 logged tool arguments are cut at 2,000 characters.

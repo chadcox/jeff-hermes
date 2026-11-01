@@ -43,12 +43,26 @@ restart_into() {  # mode model: kill the running gateway, then a probe query sta
   if loaded_since "$t"; then echo "SWITCHED $1 $2 $(date -Is)"; else echo "SWITCH_FAILED $1 $2 $(date -Is)"; exit 1; fi
 }
 
-warm() {  # load the model on Strata so the first run doesn't pay for the swap
-  local key; key=$(grep -h '^STRATA_API_KEY=' ~/.hermes/.env | cut -d= -f2- | tr -d '"')
-  local t0=$SECONDS
+warm() {  # load the model on the configured provider so the first run doesn't pay for the swap
+  local base key t0=$SECONDS
+  read -r base key < <(~/.hermes/hermes-agent/venv/bin/python - <<'PY'
+import os, yaml
+from pathlib import Path
+cfg = yaml.safe_load((Path.home() / ".hermes/config.yaml").read_text())
+model = cfg.get("model") or {}
+prov = (cfg.get("providers") or {}).get(model.get("provider"), {})
+env = prov.get("key_env", "")
+key = os.environ.get(env, "")
+for line in (Path.home() / ".hermes/.env").read_text().splitlines() if env and not key else []:
+    if line.startswith(env + "="):
+        key = line.split("=", 1)[1].strip().strip('"')
+print(model.get("base_url") or prov.get("base_url", ""), key or "-")
+PY
+)
+  [ -z "$base" ] && { echo "WARM skipped for $1: no base_url in config"; return; }
   curl -s -m 600 -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
-    http://192.168.99.65:8081/v1/chat/completions > /dev/null
+    "${base%/}/chat/completions" > /dev/null
   echo "WARM $1 $((SECONDS - t0))s"
 }
 
