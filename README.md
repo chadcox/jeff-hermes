@@ -49,7 +49,7 @@ Upstream, on Jeff-Code (Qwen 27B coding agent, 1,242 paired tasks), the `code-ro
 **about 3/4 of turns**. The pass rate stayed within noise (**62.4% vs 62.8%**), and Jeff-Code reports **0.68× time
 per task**.
 
-On Hermes, with a fast local flash model that thinks only briefly, we ran an A/B with hidden-test grading: five coding
+On Hermes, with Strata running Qwen3.8 Flash Next (IQ3_S quant) — a fast local model that thinks only briefly — we ran an A/B with hidden-test grading: five coding
 tasks × five reps × three modes, 75 runs in total.
 
 | Mode | Runs fully passing | Thinking turns | Model calls | Prompt tokens | Completion tokens | Reasoning chars | Median wall time per run |
@@ -71,8 +71,9 @@ tasks × five reps × three modes, 75 runs in total.
 
 **The honest upshot:** on a fast model that thinks briefly, the router doesn't pay for itself; never-think plus the
 guards looks like the better setup. The router should pay off on slower models that think at length on every turn,
-which is where the upstream 0.68× result came from. Early traces on a local Qwen 27B (about 25 tokens/s, up to ~3k
-reasoning chars per turn) point that way, but there is no A/B on that model yet.
+which is where the upstream 0.68× result came from. All of the numbers above come from Qwen3.8 Flash Next IQ3_S; we
+haven't yet tested a larger dense model such as Qwen3.8 27B. Early traces on a local 27B (about 25 tokens/s, up to ~3k
+reasoning chars per turn) suggest the router would help more there, but there is no A/B on that model yet.
 
 ## 🚀 Quick start
 
