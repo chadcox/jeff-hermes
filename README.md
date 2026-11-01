@@ -10,7 +10,7 @@ call, whether your big model needs to think.**
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Hermes plugin](https://img.shields.io/badge/Hermes_Agent-plugin-8A2BE2)
 ![Jeff 0.8B](https://img.shields.io/badge/router-Jeff_0.8B-orange)
-![tests](https://img.shields.io/badge/tests-131_passing-brightgreen)
+[![CI](https://github.com/chadcox/jeff-hermes/actions/workflows/ci.yml/badge.svg)](https://github.com/chadcox/jeff-hermes/actions/workflows/ci.yml)
 
 </div>
 
