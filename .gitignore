@@ -18,3 +18,4 @@ vendor/
 # Shadow logs, if copied into the repo for analysis
 *.jsonl
 *.jsonl.1
+eval/results/
