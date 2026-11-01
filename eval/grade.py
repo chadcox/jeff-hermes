@@ -19,7 +19,7 @@ print(json.dumps({{"results": res}}))
 """
 try:
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30, cwd=d).stdout.strip().splitlines()
-    r = json.loads(out[-1]) if out else {"import_error": "no output"}
+    r: dict = json.loads(out[-1]) if out else {"import_error": "no output"}
 except Exception as e:
     r = {"import_error": repr(e)}
 res = r.get("results", [])
