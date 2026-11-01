@@ -16,6 +16,11 @@ call, whether your big model needs to think.**
 
 ---
 
+> [!WARNING]
+> **Research project, not ready for release.** This is an experiment to find out whether a small router model can cut
+> thinking costs in an agent loop. Results so far are mixed (see [Does it work?](#-does-it-work)), and there is no stable
+> release: settings, log formats and behaviour may change without notice. Don't rely on it for production work.
+
 Reasoning models think on **every** step of an agent loop, including steps like `ls`, `cat` and "run the tests
 again". That thinking costs tokens and wall-clock time, and most of those steps don't need it.
 
