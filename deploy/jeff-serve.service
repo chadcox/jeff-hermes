@@ -1,0 +1,27 @@
+[Unit]
+# Assumes the repo is cloned to ~/jeff-hermes. If it lives elsewhere, change the three %h/jeff-hermes paths below.
+Description=Jeff decision model (jeff-serve) on the GPU for the Hermes jeff_router plugin (:8765)
+After=default.target
+
+[Service]
+WorkingDirectory=%h/jeff-hermes
+Environment=JEFF_DEVICE=cuda
+Environment=JEFF_CHECKPOINT=models/jeff-base-v1.3
+Environment=JEFF_ADAPTERS=models/adapters
+Environment=JEFF_HOST=127.0.0.1
+Environment=PORT=8765
+Environment=JEFF_QUEUE_MS=250
+ExecStart=%h/jeff-hermes/.venv-gpu/bin/jeff-serve
+# Warm-up: the first request after a start pays ~1 s of CUDA warm-up, which with JEFF_QUEUE_MS=250 would turn an
+# overlapping request into 529 busy. The unit is reported started only after both ExecStartPost lines finish.
+# 1. Health wait: up to 120 polls of /health (each up to 2 s, then 1 s sleep), bounded overall by TimeoutStartSec=180.
+#    If /health never reports ready, the start fails.
+# 2. One example request, best-effort: the '-' prefix means its failure does not fail the unit.
+ExecStartPost=/bin/sh -c 'i=0; until /usr/bin/curl -sf --max-time 2 http://127.0.0.1:8765/health | /usr/bin/grep -q status.:.ready; do i=$$((i+1)); [ $$i -ge 120 ] && exit 1; sleep 1; done'
+ExecStartPost=-/usr/bin/curl -sf -o /dev/null --max-time 60 -H 'Content-Type: application/json' --data-binary @%h/jeff-hermes/models/adapters/tools/example.json http://127.0.0.1:8765/v1/systemone
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

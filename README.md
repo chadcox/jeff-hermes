@@ -1,0 +1,135 @@
+<div align="center">
+
+# 🧠⚡ jeff-hermes
+
+### Think only when it matters
+
+**A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that lets a tiny 0.8B model decide, call by
+call, whether your big model needs to think.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Hermes plugin](https://img.shields.io/badge/Hermes_Agent-plugin-8A2BE2)
+![Jeff 0.8B](https://img.shields.io/badge/router-Jeff_0.8B-orange)
+![tests](https://img.shields.io/badge/tests-131_passing-brightgreen)
+
+</div>
+
+---
+
+Reasoning models think on **every** step of an agent loop, including steps like `ls`, `cat` and "run the tests
+again". That thinking costs tokens and wall-clock time, and most of those steps don't need it.
+
+**jeff-hermes** ports the thinking router from [Jeff-Code](https://github.com/firelex/jeff-code) to Hermes. Before
+each model call, [Jeff](https://github.com/firelex/jeff), a 0.8B model running locally, reads where the task is and
+answers one question: *does this step need thinking?* If not, the call goes out with `reasoning_effort: "none"`. The
+big model still does all the work. It just doesn't spend thinking tokens on easy steps.
+
+```
+ task + recent steps ──▶  Jeff (0.8B)  ──▶  P(xhigh) ≥ threshold ?
+                                            ├─ yes ─▶  big model, thinking ON   🧠
+                                            └─ no  ─▶  big model, thinking OFF  ⚡
+```
+
+## ✨ Features
+
+- **⚡ Faster, cheaper turns.** Easy steps skip thinking entirely.
+- **🛡️ Safety net.** Ported from Jeff-Code's loop and runaway guards. Thinking is forced back on when tool outputs
+  get stuck or commands keep failing. A runaway or looping reply is discarded and the call is re-asked once with
+  thinking on.
+- **🔌 Works with any provider.** Anything on Hermes' `chat_completions` API mode works: llama.cpp, vLLM, Ollama,
+  OpenRouter, other OpenAI-compatible servers. Other API modes pass through and are logged.
+- **🧯 Fails safe.** If Jeff is down, slow or busy, the call thinks as normal. The plugin never breaks a turn.
+- **📊 Fully logged.** Every call records Jeff's decision, its probabilities, the guards, and the main model's cost
+  (time, tokens, reasoning characters) in an owner-only JSONL log, with a report tool to summarise it.
+- **🪶 No changes to Hermes.** It is a plain plugin: one symlink and a few config lines.
+
+## 📈 Does it work?
+
+Upstream, on Jeff-Code (Qwen 27B coding agent, 1,242 paired tasks), the `code-router` adapter turned thinking off on
+**about 3/4 of turns**. The pass rate stayed within noise (**62.4% vs 62.8%**), and Jeff-Code reports **0.68× time
+per task**.
+
+On Hermes, with a fast local flash model that thinks only briefly, we ran an A/B with hidden-test grading: five coding
+tasks × five reps × three modes, 75 runs in total.
+
+| Mode | Runs fully passing | Thinking turns | Model calls | Prompt tokens | Completion tokens | Reasoning chars | Median wall time per run |
+|---|---|---|---|---|---|---|---|
+| Never think | 19/25 | 0% | 469 | 21.0M | 123k | 0 | 35.6 s |
+| **Router @ 0.6** | **20/25** | **19%** | **225** | **6.3M** | **90k** | **57k** | 47.2 s |
+| Always think | 19/25 | 100% | 150 | 4.2M | 118k | 195k | 47.6 s |
+
+- **Quality held.** The router's pass rate matches always-think (within noise at n=5).
+- **Less thinking, more steps.** Compared with always-think, the router cut reasoning text by about 70% and completion
+  tokens by about 24%. But without thinking the model took more steps (225 calls vs 150), and each step resends the
+  conversation, so prompt tokens rose by about 50%. On a pay-per-token API that likely costs more, not less.
+- **Wall time didn't improve.** The router's median time was the same as always-think's. Jeff itself added about 50 ms
+  per call.
+- **The guards matter.** Never-think had two runs that got stuck in loops (150 and 76 model calls; this also inflates
+  its prompt-token total). Under the router, the stuck-output guard fired twice and forced thinking, and neither run
+  looped. The guards are simple rules and don't depend on Jeff.
+- The threshold of 0.6 looks reasonable, but five reps per task can't tell nearby thresholds apart.
+
+**The honest upshot:** on a fast model that thinks briefly, the router doesn't pay for itself; never-think plus the
+guards looks like the better setup. The router should pay off on slower models that think at length on every turn,
+which is where the upstream 0.68× result came from. Early traces on a local Qwen 27B (about 25 tokens/s, up to ~3k
+reasoning chars per turn) point that way, but there is no A/B on that model yet.
+
+## 🚀 Quick start
+
+```sh
+# 1. Jeff + weights (GPU)
+git clone https://github.com/firelex/jeff vendor/jeff
+UV="uvx --from uv>=0.12.19 uv"
+$UV venv -p 3.12 .venv-gpu && VIRTUAL_ENV=$PWD/.venv-gpu $UV pip install -e 'vendor/jeff[lora,cuda]'
+.venv-gpu/bin/hf download mstrasser/jeff-base --revision v1.3 --local-dir models/jeff-base-v1.3
+.venv-gpu/bin/hf download mstrasser/jeff-adapter-code-router --revision v1.3 --local-dir models/adapters/code-router
+
+# 2. Serve it
+JEFF_DEVICE=cuda JEFF_CHECKPOINT=models/jeff-base-v1.3 JEFF_ADAPTERS=models/adapters PORT=8765 \
+  .venv-gpu/bin/jeff-serve
+
+# 3. Plug into Hermes
+ln -s "$PWD/plugin/jeff_router" ~/.hermes/plugins/jeff_router
+```
+
+```yaml
+# ~/.hermes/config.yaml
+plugins:
+  enabled: [jeff_router]
+  entries:
+    jeff_router:
+      settings:
+        thinking_router: true
+```
+
+Restart Hermes (including the gateway, if you use it), and the router is live. The full guide is in
+**[docs/install.md](docs/install.md)**. It covers CPU setup, the systemd unit, and how to check it's working, and it
+has the exact package and weight versions to use.
+
+## 📚 Documentation
+
+| | |
+|---|---|
+| [Install](docs/install.md) | jeff-serve on GPU/CPU, weights, systemd, plugin setup |
+| [Configuration](docs/configuration.md) | Every setting, provider support, failure behaviour, the log |
+| [How it works](docs/how-it-works.md) | Per-call flow, the router question, the guards, code map |
+| [Research notes](docs/research/) | Hermes hook API findings, latency and VRAM measurements |
+| [Design history](docs/design/) | The v1 shadow-mode design, and why v2 moved to thinking routing |
+
+## 🧪 Development
+
+```sh
+uvx --python 3.12 pytest -q      # unit tests; no jeff-serve or Hermes needed
+python3 tools/shadow_report.py   # summarise your shadow.jsonl
+```
+
+## 🙏 Credits
+
+- **[Jeff](https://github.com/firelex/jeff)** and its weights, by Mathias Strasser.
+- **[Jeff-Code](https://github.com/firelex/jeff-code)**: the thinking router, router question, and loop/runaway
+  guards ported here.
+- **[Hermes Agent](https://github.com/NousResearch/hermes-agent)** by Nous Research: the agent this plugs into.
+
+## 📄 License
+
+[MIT](LICENSE)

@@ -1,0 +1,44 @@
+manifest_version: 2
+name: jeff_router
+version: 0.1.0
+description: "Asks Jeff (a 0.8B model on jeff-serve) before each main-turn model call whether the agent needs to think, and turns thinking off when it does not. Also logs Jeff's view of each call beside the main model's actual action. Port of Jeff-Code's thinking router."
+kind: standalone
+author: Chad Cox
+tags: [jeff, routing, thinking, shadow]
+config_schema:
+  enabled:
+    type: bool
+    default: true
+    description: Turn the shadow router off without removing the plugin.
+  url:
+    type: str
+    default: "http://127.0.0.1:8765"
+    description: Base URL of jeff-serve.
+  timeout_s:
+    type: float
+    default: 2.0
+    description: Client timeout in seconds for one Jeff request. Off the critical path in shadow mode.
+  max_request_chars:
+    type: int
+    default: 24000
+    description: Character budget for the whole Jeff request, so it stays under jeff-serve's 8192-token limit.
+  log_max_mb:
+    type: int
+    default: 50
+    description: Rotate shadow.jsonl to shadow.jsonl.1 above this size in megabytes.
+  strata_thinking:
+    type: bool
+    default: true
+    description: "false: send reasoning_effort none on main-turn chat_completions calls (any provider), so the model answers without thinking."
+  thinking_router:
+    type: bool
+    default: false
+    description: "true: before each main-turn chat_completions call, ask Jeff's router adapter whether to think (Jeff-Code's jeff-off-unless rule); thinking is turned off unless P(xhigh) >= router_threshold."
+  router_adapter:
+    type: str
+    default: code-router
+    description: The jeff-serve adapter that answers the thinking question.
+  router_threshold:
+    type: float
+    default: 0.6
+    description: "Think when Jeff's P(xhigh) is at least this (0 to 1). Jeff-Code's evaluated setting is 0.6."

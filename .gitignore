@@ -1,0 +1,20 @@
+# Python environments (rebuild with the commands in docs/install.md)
+.venv/
+.venv-gpu/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Downloaded weights and the vendored Jeff checkout (firelex/jeff @ 3720e7c; see docs/install.md)
+models/
+vendor/
+
+# Local agent / editor state
+.claude/
+.superpowers/
+.vscode/
+.idea/
+
+# Shadow logs, if copied into the repo for analysis
+*.jsonl
+*.jsonl.1
