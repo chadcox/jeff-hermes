@@ -76,9 +76,40 @@ tasks × five reps × three modes, 75 runs in total.
 
 **The honest upshot:** on a fast model that thinks briefly, the router doesn't pay for itself; never-think plus the
 guards looks like the better setup. The router should pay off on slower models that think at length on every turn,
-which is where the upstream 0.68× result came from. All of the numbers above come from Qwen3.8 Flash Next IQ3_S; we
-haven't yet tested a larger dense model such as Qwen3.8 27B. Early traces on a local 27B (about 25 tokens/s, up to ~3k
-reasoning chars per turn) suggest the router would help more there, but there is no A/B on that model yet.
+which is where the upstream 0.68× result came from.
+
+### Qwen3.8 27B (2026-11-04)
+
+We then ran the same A/B on two quants of the dense Qwen3.8 27B, a slower model that thinks at length: eight coding
+tasks × two reps × three modes per quant, with hidden-test grading.
+
+| Model | Mode | Runs fully passing | Thinking turns | Model calls | Prompt tokens | Completion tokens | Reasoning chars | Median wall time per run |
+|---|---|---|---|---|---|---|---|---|
+| 27B IQ3_S | Never think | 13/16 | 0% | 192 | 6.1M | 66k | 0 | 71 s |
+| 27B IQ3_S | **Router @ 0.6** | **15/16** | **22%** | **204** | **6.9M** | **122k** | **137k** | **83 s** |
+| 27B IQ3_S | Always think | 16/16 | 100% | 127 | 4.4M | 191k | 425k | 141 s |
+| 27B Q4_K_M | Never think | 16/22 ¹ | 0% | 328 | 11.7M | 113k | 0 | 131 s |
+| 27B Q4_K_M | **Router @ 0.6** | **12/16** | **22%** | **188** | **6.9M** | **108k** | **112k** | **118 s** |
+| 27B Q4_K_M | Always think | 14/16 | 100% | 140 | 5.8M | 188k | 409k | 212 s |
+
+¹ Never-think on Q4_K_M got an extra rep on six tasks. On the first two reps only, it is 12/16 with a 146 s median.
+
+- **Wall time improved this time.** On both quants the router's median run took about 0.6× as long as always-think's
+  (83 s vs 141 s, 118 s vs 212 s). This is close to the upstream 0.68×.
+- **Thinking cut by about 70%.** Reasoning text dropped by 68% (IQ3_S) and 73% (Q4_K_M) compared with always-think.
+  Completion tokens dropped by 36% and 43%.
+- **Prompt tokens still rose.** As on Flash Next, the model took more steps without thinking, so prompt tokens rose by
+  57% (IQ3_S) and 19% (Q4_K_M). Locally that is cheap thanks to prompt caching. On a pay-per-token API it would eat into
+  the savings.
+- **Quality is mixed.** On IQ3_S the router was close to always-think (15/16 vs 16/16) and ahead of never-think. On
+  Q4_K_M it trailed always-think (12/16 vs 14/16) and matched never-think on matched reps. Two reps per task is too
+  few to tell whether that gap is real.
+- **The guards fired.** Under the router, the loop guard fired three times on each quant, and on IQ3_S the stuck-output
+  and failed-command guards fired eight more times. Never-think on IQ3_S had one run hit the timeout.
+
+**Upshot so far:** on a slow model that thinks at length, the router saves real time (about 40% per run) and most of
+the thinking, at a quality cost that is small on one quant and unclear on the other. More reps are needed before
+calling it.
 
 ## 🚀 Quick start
 
