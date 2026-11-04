@@ -1,6 +1,7 @@
 """A/B harness for the jeff_router plugin.
 
-  run.py set <mode> <model>                 rewrite ~/.hermes/config.yaml for a mode and model
+  run.py set <mode> <model>                 rewrite ~/.hermes/config.yaml for a mode and model (first backs it up)
+  run.py restore                            put the backed-up config.yaml back
   run.py run <mode> <task> <rep> <outdir>   fresh copy of a task, one `hermes chat` run, grade, append to <outdir>/results.jsonl
 
 Modes: off (never think), on (always think), router@<threshold>.
@@ -14,6 +15,7 @@ sys.path.insert(0, str(EVAL.parent / "tools"))
 from shadow_report import default_logs, load_default
 
 CFG = Path.home() / ".hermes/config.yaml"
+BACKUP = CFG.with_name("config.yaml.jeff-eval-backup")
 HERMES = Path.home() / ".hermes/hermes-agent/venv/bin/hermes"
 TIMEOUT = 2400
 MODES = {
@@ -43,7 +45,14 @@ def set_mode(mode, model):
     text = text[:cur.start()] + MODES[name].format(thr=thr or "0.6") + text[cur.end():]
     text, n = re.subn(r"\Amodel:\n  default: .*\n", f"model:\n  default: {model}\n", text)
     assert n == 1, "model.default not found at the top of config.yaml"
+    if not BACKUP.exists():  # keep the user's original, not an earlier `set`
+        shutil.copy2(CFG, BACKUP)
     CFG.write_text(text)
+
+
+def restore():
+    if BACKUP.exists():
+        shutil.move(str(BACKUP), str(CFG))
 
 
 def current_model():
@@ -72,12 +81,20 @@ def run(mode, task, rep, outdir):
     shutil.copytree(EVAL / "tasks" / folder, d)
     subprocess.run("git init -q && git add -A && git -c user.name=eval -c user.email=eval@localhost commit -qm init",
                    shell=True, cwd=d, check=True)
+    # The agent runs as this user and has found eval/ before, so hide the hidden checks, reference
+    # solutions, task sources and earlier runs' outputs until it is done.
+    locked = [x for x in (EVAL / "hidden", EVAL / "ref", EVAL / "tasks", outdir / "runs") if x.is_dir()]
     t0 = time.time()
     try:
+        for x in locked:
+            x.chmod(0o000)
         p = subprocess.run([str(HERMES), "chat", "-Q", "-q", prompt], cwd=d, capture_output=True, text=True, timeout=TIMEOUT)
         out, timed_out = p.stdout + p.stderr, False
     except subprocess.TimeoutExpired as e:
         out, timed_out = "TIMEOUT " + (e.stdout.decode() if isinstance(e.stdout, bytes) else str(e.stdout or "")), True
+    finally:
+        for x in locked:
+            x.chmod(0o755)
     wall = time.time() - t0
     keep.parent.mkdir(parents=True, exist_ok=True)
     (keep.parent / f"{keep.name}.out").write_text(out)
@@ -101,5 +118,7 @@ def run(mode, task, rep, outdir):
 if __name__ == "__main__":
     if sys.argv[1] == "set":
         set_mode(sys.argv[2], sys.argv[3])
+    elif sys.argv[1] == "restore":
+        restore()
     else:
         run(*sys.argv[2:6])

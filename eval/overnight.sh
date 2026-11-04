@@ -3,26 +3,27 @@
 # Mode order rotates each rep; model order alternates. The Hermes gateway service is stopped for the whole batch;
 # each `hermes chat` starts its own gateway, which is killed on every switch so the next one reads the new config.
 # On exit (done, END reached, or killed) the original config is restored, the service started again, and the report written.
-#   eval/overnight.sh <outdir>          e.g. eval/results/2026-11-02-27b
+#   MODELS="model-a model-b" eval/overnight.sh <outdir>    e.g. eval/results/2026-11-02-27b
+# Written for one setup: Hermes installed under ~/.hermes, its gateway run as the systemd user unit
+# hermes-gateway.service, and models served by an OpenAI-compatible endpoint. Adapt it to yours.
 set -u
 EVAL=$(cd "$(dirname "$0")" && pwd)
 OUT=$(realpath -m "${1:?outdir}")
-MODELS=(${MODELS:-Qwen3.8-27B-UD-Q4_K_M-262k-MTP Qwen3.8-27B-UD-IQ3_S-5080-MTP})
+MODELS=(${MODELS:?set MODELS to the model names to compare, space-separated})
 TASKS=(${TASKS:-t1 t2 t3 t4 t5 t6 t7 t8})
 MAX_REPS=${MAX_REPS:-5}
 END=$(date -d "${END:-09:00}" +%s)
 [ "$END" -le "$(date +%s)" ] && END=$((END + 86400))  # default: the next 09:00
-CFG=~/.hermes/config.yaml
 HERMES=~/.hermes/hermes-agent/venv/bin/hermes
 ORDERS=("router@0.6 on off" "on off router@0.6" "off router@0.6 on" "router@0.6 off on" "on router@0.6 off")
 
 mkdir -p "$OUT"
-cp -p "$CFG" "$OUT/config.yaml.orig"
 exec >> "$OUT/batch.log" 2>&1
 git -C "$EVAL" diff --quiet HEAD -- tasks || { echo "ABORT eval/tasks differs from git HEAD; restore it first"; exit 1; }
 
 finish() {
-  cp -p "$OUT/config.yaml.orig" "$CFG"
+  python3 "$EVAL/run.py" restore
+  chmod 755 "$EVAL/hidden" "$EVAL/ref" "$EVAL/tasks" "$OUT/runs" 2>/dev/null  # in case a run was killed mid-way
   $HERMES gateway stop --all -y > /dev/null 2>&1
   systemctl --user start hermes-gateway.service
   echo "HERMES_STARTED $(systemctl --user is-active hermes-gateway.service)"
