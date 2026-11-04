@@ -49,6 +49,21 @@ def test_render_state_without_steps():
         "Task:\nhi\n\nNo steps have been taken yet.")
 
 
+def test_render_state_keeps_user_updates_and_tool_history():
+    messages = [
+        {"role": "user", "content": "say hi"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": "Analyze the concurrency bug"},
+        {"role": "assistant", "tool_calls": [call("a", "terminal", command="pytest")]},
+        {"role": "tool", "tool_call_id": "a", "content": "race detected"},
+        {"role": "user", "content": [{"type": "text", "text": "Preserve the public API"}]},
+    ]
+    state = render_state(messages)
+    assert state.startswith("Task:\nsay hi\n\nUser update:\nAnalyze the concurrency bug\n\n"
+                            "User update:\nPreserve the public API\n\nSteps so far, oldest first:")
+    assert "$ pytest\nrace detected" in state
+
+
 def test_render_state_keeps_terminal_tail_and_budget():
     long_output = "\n".join(f"line {i}" for i in range(100))
     messages: list[dict] = [{"role": "user", "content": "t"}]

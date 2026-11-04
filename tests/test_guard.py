@@ -114,16 +114,6 @@ def reply_text(text):
                                                                   tool_calls=None))])
 
 
-class Replies(NextCall):
-    def __init__(self, *responses):
-        super().__init__()
-        self.responses = list(responses)
-
-    def __call__(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
-        return self.responses.pop(0)
-
-
 def test_failed_commands_force_thinking_despite_router_off(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(0.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
@@ -136,26 +126,25 @@ def test_failed_commands_force_thinking_despite_router_off(fake_jeff, tmp_path):
     assert rec["main_thinking"] is True and rec["guard"]["forced"][0]["rule"] == "failed_commands"
 
 
-def test_loop_with_thinking_off_is_reasked_with_thinking(fake_jeff, tmp_path):
+def test_loop_with_thinking_off_is_logged_not_reasked(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(0.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
     request = {"messages": history(step("c1", "read_file", {"path": "a.py"})), "tools": HI["tools"]}
-    second = main_text()
-    nxt = Replies(reply_calls(call("n1", "read_file", {"path": "a.py"})), second)
-    assert router(request=request, next_call=nxt, provider="local", **CONTEXT) is second
-    assert [c[0] for c in nxt.calls] == [({**request, "reasoning_effort": "none"},), ()]
+    first = reply_calls(call("n1", "read_file", {"path": "a.py"}))
+    nxt = NextCall(first)
+    assert router(request=request, next_call=nxt, provider="local", **CONTEXT) is first
+    assert [c[0] for c in nxt.calls] == [({**request, "reasoning_effort": "none"},)]
     rec = wait_records(log, 1)[0]
-    assert rec["main_thinking"] is True
-    assert rec["guard"]["trigger"]["trigger"] == "loop" and rec["guard"]["reask_runaway"] is None
+    assert rec["main_thinking"] is False and rec["guard"]["trigger"]["trigger"] == "loop"
 
 
-def test_runaway_is_reasked_even_when_thinking(fake_jeff, tmp_path):
+def test_runaway_is_logged_not_reasked(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(1.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
-    second = main_text()
-    nxt = Replies(reply_text("z" * 20000 + "round and round we go " * 40), second)
-    assert router(request=HI, next_call=nxt, provider="local", **CONTEXT) is second
-    assert len(nxt.calls) == 2
+    first = reply_text("z" * 20000 + "round and round we go " * 40)
+    nxt = NextCall(first)
+    assert router(request=HI, next_call=nxt, provider="local", **CONTEXT) is first
+    assert len(nxt.calls) == 1
     rec = wait_records(log, 1)[0]
     assert rec["guard"]["trigger"]["trigger"] == "runaway" and rec["guard"]["trigger"]["where"] == "text"
 

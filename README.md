@@ -39,8 +39,8 @@ big model still does all the work. It just doesn't spend thinking tokens on easy
 
 - **⚡ Faster, cheaper turns.** Easy steps skip thinking entirely.
 - **🛡️ Safety net.** Ported from Jeff-Code's loop and runaway guards. Thinking is forced back on when tool outputs
-  get stuck or commands keep failing. A runaway or looping reply is discarded and the call is re-asked once with
-  thinking on.
+  get stuck or commands keep failing. Runaway and looping replies are detected and logged. Hermes allows only
+  one provider call per middleware, so they can't be re-asked.
 - **🔌 Works with any provider.** Anything on Hermes' `chat_completions` API mode works: llama.cpp, vLLM, Ollama,
   OpenRouter, other OpenAI-compatible servers. Other API modes pass through and are logged.
 - **🧯 Fails safe.** If Jeff is down, slow or busy, the call thinks as normal. The plugin never breaks a turn.
@@ -155,6 +155,11 @@ thought. The full guide, with CPU setup, the systemd unit and exact versions, is
 uvx --python 3.12 pytest -q      # unit tests; no jeff-serve or Hermes needed
 python3 tools/shadow_report.py   # summarise your shadow.jsonl
 ```
+
+The A/B harness in `eval/` saves each run's session telemetry beside its output, with owner-only permissions.
+`python3 eval/report.py OUTDIR` uses those snapshots; older results fall back to the live shadow logs.
+A comparison reports **INSUFFICIENT TELEMETRY** when a paired run lacks token counts, has missing or duplicate
+call numbers, does not reach a final `stop` reply, or times out. Missing measurements never count as token savings.
 
 ## 🙏 Credits
 

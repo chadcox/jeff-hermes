@@ -6,10 +6,13 @@
 Modes: off (never think), on (always think), router@<threshold>.
 A gateway reads plugin settings only at start, so stop the running one after `set` (overnight.sh does).
 """
-import json, re, shutil, subprocess, sys, time
+import json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 EVAL = Path(__file__).resolve().parent
+sys.path.insert(0, str(EVAL.parent / "tools"))
+from shadow_report import default_logs, load_default
+
 CFG = Path.home() / ".hermes/config.yaml"
 HERMES = Path.home() / ".hermes/hermes-agent/venv/bin/hermes"
 TIMEOUT = 2400
@@ -47,13 +50,28 @@ def current_model():
     return re.match(r"model:\n  default: (.*)\n", CFG.read_text()).group(1).strip()
 
 
+def save_telemetry(session, path):
+    records = [c for log in default_logs() for c in load_default(log)
+               if session is not None and c.get("session_id") == session]
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(f.fileno(), 0o600)
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+
 def run(mode, task, rep, outdir):
     folder, prompt = TASKS[task]
     outdir = Path(outdir)
     model = current_model()
-    d = outdir / "runs" / f"{model}-{mode}-{task}-{rep}"
-    shutil.rmtree(d, ignore_errors=True)
+    keep = outdir / "runs" / f"{model}-{mode}-{task}-{rep}"
+    shutil.rmtree(keep, ignore_errors=True)
+    # Work outside this repo, in a git repo of its own, so the agent can't see or touch the
+    # task sources, other runs, or this repo's git state. Moved into runs/ after grading.
+    d = Path(tempfile.mkdtemp(prefix="jeff-eval-")) / keep.name
     shutil.copytree(EVAL / "tasks" / folder, d)
+    subprocess.run("git init -q && git add -A && git -c user.name=eval -c user.email=eval@localhost commit -qm init",
+                   shell=True, cwd=d, check=True)
     t0 = time.time()
     try:
         p = subprocess.run([str(HERMES), "chat", "-Q", "-q", prompt], cwd=d, capture_output=True, text=True, timeout=TIMEOUT)
@@ -61,14 +79,20 @@ def run(mode, task, rep, outdir):
     except subprocess.TimeoutExpired as e:
         out, timed_out = "TIMEOUT " + (e.stdout.decode() if isinstance(e.stdout, bytes) else str(e.stdout or "")), True
     wall = time.time() - t0
-    (d.parent / f"{d.name}.out").write_text(out)
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    (keep.parent / f"{keep.name}.out").write_text(out)
     sid = re.findall(r"session_id:\s*(\S+)", out)
+    telemetry = Path("runs") / f"{keep.name}.shadow.jsonl"
+    save_telemetry(sid[-1] if sid else None, outdir / telemetry)
     grade = json.loads(subprocess.run([sys.executable, str(EVAL / "grade.py"), task, str(d)], capture_output=True, text=True).stdout)
     orig_tests = EVAL / "tasks" / folder / "tests"
     tests_touched = orig_tests.exists() and subprocess.run(
         ["diff", "-r", "-x", "__pycache__", str(orig_tests), str(d / "tests")], capture_output=True).returncode != 0
+    shutil.move(str(d), str(keep))
+    d.parent.rmdir()
     rec = {"model": model, "mode": mode, "task": task, "rep": rep, "session": sid[-1] if sid else None,
-           "wall_s": round(wall, 1), "timeout": timed_out, "tests_touched": tests_touched, **grade}
+           "wall_s": round(wall, 1), "timeout": timed_out, "tests_touched": tests_touched,
+           "telemetry": str(telemetry), **grade}
     with open(outdir / "results.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
     print(json.dumps(rec), flush=True)

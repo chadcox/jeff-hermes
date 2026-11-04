@@ -80,14 +80,10 @@ class ShadowRouter:
         response = self._call(request, next_call, thinking)
         trigger = self._trigger(messages, response, thinking) if routed else None
         if trigger is not None:
-            # Jeff-Code's thinking control: discard the reply and ask exactly once more, thinking on
-            first_ms = round((time.monotonic() - started) * 1000)
+            # Hermes' next_call is single-use per frame, so a triggered reply cannot be re-asked:
+            # log the trigger and the reply's cost, and return the reply it already produced.
             pending.guard = {**(pending.guard or {}), "trigger": trigger,
-                             "discarded": self._safe_cost(request, response, first_ms)}
-            thinking = True
-            started = time.monotonic()
-            response = self._call(request, next_call, thinking)
-            pending.guard["reask_runaway"] = self._runaway(response)
+                             "reply": self._safe_cost(request, response, round((time.monotonic() - started) * 1000))}
         pending.main_thinking = thinking
         self._finish(pending, request, response, round((time.monotonic() - started) * 1000), context)
         if not thinking and pending.cost is not None and pending.cost["reasoning_chars"] > 0:
@@ -134,7 +130,7 @@ class ShadowRouter:
         return None
 
     def _trigger(self, messages: list[Any], response: Any, thinking: bool) -> dict[str, Any] | None:
-        """Runaway at any level; the loop guard only when thinking was off and the reply calls tools. Never raises."""
+        """Runs the runaway and loop guards over the reply; never raises."""
         runaway = self._runaway(response)
         if runaway is not None or thinking:
             return runaway

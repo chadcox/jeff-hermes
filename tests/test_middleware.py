@@ -58,6 +58,8 @@ class NextCall:
         self.response, self.error, self.calls = response, error, []
 
     def __call__(self, *args, **kwargs):
+        # Hermes makes next_call single-use per middleware frame
+        assert not self.calls, "next_call() called more than once"
         self.calls.append((args, kwargs))
         if self.error:
             raise self.error

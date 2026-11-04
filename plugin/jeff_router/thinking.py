@@ -96,7 +96,7 @@ def _cut_lines(text: str, from_end: bool) -> str:
 def render_state(messages: list[Any]) -> str:
     """Jeff-Code's renderState(trimState(task, steps)) over a Hermes chat-completions message list."""
     users = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-    task = _text(users[0].get("content")) if users else ""
+    task = "\n\nUser update:\n".join(_text(m.get("content")) for m in users)
     results = {m.get("tool_call_id"): m for m in messages if isinstance(m, dict) and m.get("role") == "tool"}
     steps: list[tuple[str, str | None, bool]] = []
     for message in messages:

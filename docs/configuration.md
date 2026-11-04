@@ -51,8 +51,8 @@ Path: `~/.hermes/plugin-data/agent-plugin-jeff_router-<digest>/shadow.jsonl`
 The log has one JSON line per main-turn call. Its fields include:
 
 - `router`: the level Jeff chose (`off` / `xhigh`), the outcome, the probabilities, and how long Jeff took.
-- `guard`: whether thinking was forced (by stuck outputs or failed commands), or the reply was discarded and the call
-  re-asked (runaway or loop).
+- `guard`: whether thinking was forced (by stuck outputs or failed commands), or a runaway or loop reply was
+  detected (`trigger`; logged only, not re-asked).
 - `main_thinking`: whether the call that was kept actually thought.
 - `main_cost`: wall time, token usage, and reasoning and content character counts.
 - `jeff` / `main`: Jeff's predicted next tool beside the tool the main model actually called (shadow comparison).

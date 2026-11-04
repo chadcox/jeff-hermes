@@ -19,6 +19,7 @@ ORDERS=("router@0.6 on off" "on off router@0.6" "off router@0.6 on" "router@0.6 
 mkdir -p "$OUT"
 cp -p "$CFG" "$OUT/config.yaml.orig"
 exec >> "$OUT/batch.log" 2>&1
+git -C "$EVAL" diff --quiet HEAD -- tasks || { echo "ABORT eval/tasks differs from git HEAD; restore it first"; exit 1; }
 
 finish() {
   cp -p "$OUT/config.yaml.orig" "$CFG"
@@ -79,6 +80,10 @@ for rep in $(seq "$MAX_REPS"); do
       for task in "${TASKS[@]}"; do
         [ "$(date +%s)" -ge "$END" ] && { echo "END reached before rep $rep $model $mode $task"; exit 0; }
         python3 "$EVAL/run.py" run "$mode" "$task" "r$rep" "$OUT"
+        # no session and no timeout = hermes never reached the model; two in a row means the gateway is down
+        if tail -1 "$OUT/results.jsonl" | grep -q '"session": null, "wall_s": [0-9.]*, "timeout": false'; then
+          dead=$((${dead:-0} + 1)); [ "$dead" -ge 2 ] && { echo "ABORT gateway unreachable $(date -Is)"; exit 1; }
+        else dead=0; fi
       done
     done
   done

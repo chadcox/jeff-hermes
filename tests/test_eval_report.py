@@ -1,0 +1,131 @@
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+EVAL = Path(__file__).resolve().parents[1] / "eval"
+
+
+def record(session, count=1, finish="stop", tokens=50):
+    return {"session_id": session, "api_call_count": count,
+            "main_cost": {"finish_reason": finish, "prompt_tokens": tokens, "completion_tokens": tokens}}
+
+
+def write_records(path, records):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+@pytest.fixture
+def batch(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    out = tmp_path / "batch"
+    rows = [{"model": "m", "mode": mode, "task": "t1", "rep": "r1", "session": session,
+             "wall_s": wall, "passed": 1, "total": 1}
+            for mode, session, wall in [("on", "baseline", 100), ("router@0.6", "router", 50)]]
+    write_records(out / "results.jsonl", rows)
+    log = tmp_path / "hermes/plugin-data/agent-plugin-jeff_router-test/shadow.jsonl"
+    write_records(log, [record("baseline", tokens=100), record("router")])
+    return out, rows, log
+
+
+def report(out):
+    result = subprocess.run([sys.executable, str(EVAL / "report.py"), str(out)],
+                            capture_output=True, text=True, check=True)
+    return result.stdout
+
+
+def test_complete_telemetry_can_win_or_lose(batch):
+    out, _, log = batch
+    assert "ROUTER WINS" in report(out)
+    write_records(log, [record("baseline", tokens=100), record("router", tokens=150)])
+    assert "ROUTER DOES NOT CLEAR THE BAR" in report(out)
+
+
+@pytest.mark.parametrize("missing", ["baseline", "router"])
+def test_missing_session_cannot_win(batch, missing):
+    out, _, log = batch
+    write_records(log, [record(s) for s in ("baseline", "router") if s != missing])
+    text = report(out)
+    assert "INSUFFICIENT TELEMETRY" in text and "ROUTER WINS" not in text
+
+
+@pytest.mark.parametrize("cost", [None, {}, "invalid", {"finish_reason": "stop", "prompt_tokens": 10},
+                                 {"finish_reason": "stop", "prompt_tokens": None, "completion_tokens": 10},
+                                 {"finish_reason": "stop", "prompt_tokens": -1, "completion_tokens": 10},
+                                 {"finish_reason": "stop", "prompt_tokens": "10", "completion_tokens": 10},
+                                 {"finish_reason": "stop", "prompt_tokens": True, "completion_tokens": 10}])
+def test_unusable_token_usage_cannot_win_or_crash(batch, cost):
+    out, _, log = batch
+    bad = {**record("router"), "main_cost": cost}
+    write_records(log, [record("baseline", tokens=100), bad])
+    text = report(out)
+    assert "INSUFFICIENT TELEMETRY" in text and "ROUTER WINS" not in text
+
+
+@pytest.mark.parametrize("calls", [[], [record("router", count=2)],
+                                  [record("router", finish="tool_calls"), record("router", count=3)],
+                                  [record("router"), record("router")],
+                                  [record("router", finish="tool_calls")]])
+def test_incomplete_call_sequence_cannot_win(batch, calls):
+    out, _, log = batch
+    write_records(log, [record("baseline", tokens=100), *calls])
+    assert "INSUFFICIENT TELEMETRY" in report(out)
+
+
+def test_out_of_order_calls_and_zero_usage_are_valid(batch):
+    out, _, log = batch
+    write_records(log, [record("baseline", tokens=100), record("router", count=2, tokens=0),
+                        record("router", finish="tool_calls", tokens=10)])
+    assert "ROUTER WINS" in report(out)
+
+
+def test_timeout_cannot_win(batch):
+    out, rows, _ = batch
+    rows[1]["timeout"] = True
+    write_records(out / "results.jsonl", rows)
+    assert "INSUFFICIENT TELEMETRY" in report(out)
+
+
+def test_snapshots_survive_live_log_rotation_and_missing_archive_is_not_hidden(batch):
+    out, rows, log = batch
+    for r in rows:
+        r["telemetry"] = f"runs/{r['session']}.shadow.jsonl"
+        write_records(out / r["telemetry"], [record(r["session"], tokens=100 if r["mode"] == "on" else 50)])
+    write_records(out / "results.jsonl", rows)
+    log.unlink()
+    assert "ROUTER WINS" in report(out)
+    write_records(log, [record("baseline", tokens=100), record("router")])
+    (out / rows[1]["telemetry"]).unlink()
+    assert "INSUFFICIENT TELEMETRY" in report(out)
+
+
+def test_run_archives_only_its_session_with_private_permissions(batch, monkeypatch, capsys):
+    out, _, log = batch
+    write_records(log.with_name(log.name + ".1"), [record("router", finish="tool_calls")])
+    write_records(log, [record("router", count=2), record("unrelated")])
+    spec = importlib.util.spec_from_file_location("eval_run", EVAL / "run.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    monkeypatch.setattr(runner, "current_model", lambda: "m")
+    monkeypatch.setattr(runner.tempfile, "mkdtemp", lambda **kw: str(out / "temp"))
+
+    def fake_run(args, **kw):
+        if isinstance(args, list) and args[0] == str(runner.HERMES):
+            return SimpleNamespace(stdout="session_id: router\n", stderr="")
+        if isinstance(args, list) and args[1] == str(EVAL / "grade.py"):
+            return SimpleNamespace(stdout='{"passed": 1, "total": 1}')
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    runner.run("router@0.6", "t3", "r1", out)
+    row = json.loads(capsys.readouterr().out)
+    archive = out / row["telemetry"]
+    saved = [json.loads(line) for line in archive.read_text().splitlines()]
+    assert [c["api_call_count"] for c in saved] == [1, 2]
+    assert all(c["session_id"] == "router" for c in saved)
+    assert archive.stat().st_mode & 0o777 == 0o600

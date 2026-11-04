@@ -28,14 +28,14 @@ sequenceDiagram
         P->>M: request + reasoning_effort: "none"
     end
     M-->>P: reply
-    P->>P: runaway? loop? → discard and re-ask once with thinking on
+    P->>P: runaway? loop? → note it in the record
     P-->>H: reply
     P--)P: append record to shadow.jsonl (background)
 ```
 
 ### 1. Render the state
 
-The plugin rebuilds the state the way Jeff-Code does: the task (the first user message), then the most recent steps
+The plugin uses Jeff-Code's state format: the task (the first user message, followed by later user updates), then the most recent steps
 rendered as shell commands with the last 40 lines of their output, within 8,000 characters. Hermes tools are mapped
 to their shell equivalents (`read_file` → `cat` / `sed -n`, `search_files` → `grep -rn`, and so on), which is the
 form the adapter was trained on.
@@ -57,11 +57,11 @@ These are ported from Jeff-Code's `loop-guard.ts`, `runaway.ts` and `thinking-co
 |---|---|---|
 | **Stuck outputs** | The last 3 tool results end the same way (Dice similarity ≥ 0.9 on the last 2,000 chars) | Think on this call |
 | **Failed commands** | The last 2 terminal commands both failed | Think on this call |
-| **Runaway** | The reply repeats a piece of text or a line many times (over 20,000 chars) | Discard the reply and re-ask once, thinking on |
-| **Loop** | Thinking was off and the reply repeats a recent tool call with nothing changed in between | Discard the reply and re-ask once, thinking on |
+| **Runaway** | The reply repeats a piece of text or a line many times (over 20,000 chars) | Log it in `guard` |
+| **Loop** | Thinking was off and the reply repeats a recent tool call with nothing changed in between | Log it in `guard` |
 
-A re-ask happens at most once per call. The cost of the discarded reply is still logged, so savings are not
-overstated.
+Runaway and loop replies are not re-asked: Hermes makes `next_call` single-use per middleware, so the plugin can't
+call the provider a second time. The reply is returned as is.
 
 ### 4. Log
 
