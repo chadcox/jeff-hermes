@@ -33,6 +33,10 @@ finish() {
 trap finish EXIT
 trap 'exit 1' INT TERM
 
+recorded() {  # model mode task rep: is this run already in results.jsonl? lets a stopped batch resume where it left off
+  grep -qF "\"model\": \"$1\", \"mode\": \"$2\", \"task\": \"$3\", \"rep\": \"$4\"" "$OUT/results.jsonl" 2>/dev/null
+}
+
 loaded_since() {  # did a gateway load the plugin at or after this "YYYY-mm-dd HH:MM:SS"?
   cat ~/.hermes/logs/*.log* 2>/dev/null | grep -a 'jeff_router: shadow mode on' | cut -c1-19 | awk -v t="$1" '$0 >= t {f=1} END {exit !f}'
 }
@@ -77,8 +81,10 @@ for rep in $(seq "$MAX_REPS"); do
   for model in "${order[@]}"; do
     warm "$model"
     for mode in ${ORDERS[$(((rep - 1) % 5))]}; do
+      todo=(); for task in "${TASKS[@]}"; do recorded "$model" "$mode" "$task" "r$rep" || todo+=("$task"); done
+      [ ${#todo[@]} -eq 0 ] && continue  # resumed batch: this model/mode/rep is already in results.jsonl
       restart_into "$mode" "$model"
-      for task in "${TASKS[@]}"; do
+      for task in "${todo[@]}"; do
         [ "$(date +%s)" -ge "$END" ] && { echo "END reached before rep $rep $model $mode $task"; exit 0; }
         python3 "$EVAL/run.py" run "$mode" "$task" "r$rep" "$OUT"
         # no session and no timeout = hermes never reached the model; two in a row means the gateway is down
