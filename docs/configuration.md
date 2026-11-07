@@ -9,6 +9,7 @@ restart Hermes. An invalid value falls back to its default.
 | `url` | `http://127.0.0.1:8765` | Base URL of jeff-serve. |
 | `timeout_s` | `2.0` | Client timeout for one Jeff request, in seconds. |
 | `max_request_chars` | `24000` | Character budget for a Jeff request, which keeps it under jeff-serve's 8192-token limit. |
+| `log` | `true` | `false` writes no `shadow.jsonl`. |
 | `log_max_mb` | `50` | When `shadow.jsonl` reaches this size it is rotated to `shadow.jsonl.1`. |
 | `thinking_router` | `false` | **The main feature.** Asks Jeff before each main-turn call whether to think. |
 | `router_adapter` | `code-router` | The jeff-serve adapter that answers the thinking question. |

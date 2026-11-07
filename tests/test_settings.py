@@ -7,7 +7,7 @@ def test_defaults_when_nothing_configured():
 
 def test_valid_values_are_used():
     given = {"enabled": False, "url": "http://127.0.0.1:9999", "timeout_s": 1.5, "max_request_chars": 12000,
-             "log_max_mb": 5, "main_thinking": False, "thinking_router": True, "router_adapter": "r",
+             "log": False, "log_max_mb": 5, "main_thinking": False, "thinking_router": True, "router_adapter": "r",
              "router_threshold": 0.7}
     assert read_settings(lambda key, default: given.get(key, default)) == given
 

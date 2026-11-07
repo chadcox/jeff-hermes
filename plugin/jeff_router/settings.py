@@ -9,6 +9,7 @@ DEFAULTS: dict[str, Any] = {
     "url": "http://127.0.0.1:8765",
     "timeout_s": 2.0,
     "max_request_chars": 24000,
+    "log": True,
     "log_max_mb": 50,
     "main_thinking": True,
     "thinking_router": False,

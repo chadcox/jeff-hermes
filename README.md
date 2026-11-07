@@ -181,6 +181,7 @@ When enabled, the plugin:
   sets `reasoning_effort: "none"` on main-turn `chat_completions` calls, whichever provider you use.
 - **Writes a log** of every call to `shadow.jsonl` in its Hermes plugin-data folder. Records include tool calls,
   file paths and the router's view of the conversation state. It rotates above `log_max_mb`.
+  Set `log: false` to turn it off.
 - **Checks file paths** named in the conversation exist, relative to the session folder. It does not read their
   contents.
 

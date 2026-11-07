@@ -35,7 +35,8 @@ def register(ctx: Any) -> None:
     if not settings["enabled"]:
         logger.info("jeff_router: disabled in settings; registering nothing")
         return
-    log = ShadowLog(Path(data_dir) / "shadow.jsonl", max_bytes=int(settings["log_max_mb"] * 1024 * 1024))
+    log = (ShadowLog(Path(data_dir) / "shadow.jsonl", max_bytes=int(settings["log_max_mb"] * 1024 * 1024))
+           if settings["log"] else None)
     router = ShadowRouter(client=JeffClient(settings["url"], settings["timeout_s"]), log=log, cwd=_cwd_reader(ctx),
                           max_request_chars=int(settings["max_request_chars"]),
                           main_thinking=settings["main_thinking"], thinking_router=settings["thinking_router"],
@@ -44,7 +45,7 @@ def register(ctx: Any) -> None:
     on_unload = getattr(ctx, "on_unload", None)
     if callable(on_unload):
         on_unload(router.close)
-    logger.info("jeff_router: shadow mode on; Jeff at %s, log %s", settings["url"], log.path)
+    logger.info("jeff_router: shadow mode on; Jeff at %s, log %s", settings["url"], log.path if log else "off")
 
 
 __all__ = ["register"]

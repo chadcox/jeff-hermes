@@ -278,6 +278,20 @@ def test_register_wires_middleware_and_log_path(tmp_path, fake_jeff):
     assert wait_records(tmp_path / "plugin-data" / "shadow.jsonl", 1)[0]["outcome"] == "ok"
 
 
+def test_log_false_writes_no_shadow_log(tmp_path, fake_jeff):
+    registered = []
+    settings = {"url": fake_jeff.url, "log": False}
+    ctx = NS(get_config=lambda key, default: settings.get(key, default),
+             register_middleware=lambda kind, fn: registered.append((kind, fn)),
+             state=NS(data_dir=tmp_path / "plugin-data"), session_cwd=lambda: "")
+    register(ctx)
+    [(_, router)] = registered
+    response = main_text()
+    assert router(request=HI, next_call=NextCall(response), **CONTEXT) is response
+    router.close()
+    assert not (tmp_path / "plugin-data").exists()
+
+
 def test_thinking_off_sends_reasoning_effort_none_to_the_main_model(fake_jeff, tmp_path):
     router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
     request = {"model": "m", **HI}
@@ -422,3 +436,19 @@ def test_router_asked_for_any_provider(fake_jeff, tmp_path):
     [((sent,), _)] = nxt.calls
     assert sent["reasoning_effort"] == "none"
     assert wait_records(log, 1)[0]["router"]["level"] == "off"
+
+
+def test_log_off_still_routes_but_skips_the_shadow_question(fake_jeff, tmp_path):
+    fake_jeff.reply = router_reply(0.3)
+    router = ShadowRouter(client=JeffClient(fake_jeff.url, 2.0), log=None, cwd=lambda: "",
+                          max_request_chars=24000, thinking_router=True)
+    request = {"model": "m", **HI}
+    expected = main_text()
+    nxt = NextCall(expected)
+    result = router(request=request, next_call=nxt, provider="local", **CONTEXT)
+    [((sent,), _)] = nxt.calls
+    assert sent == {**request, "reasoning_effort": "none"}  # the routing decision still applies
+    time.sleep(0.1)
+    assert [r["model"] for r in fake_jeff.requests] == ["code-router"]  # no "tools" shadow question
+    assert result is expected
+    assert list(tmp_path.iterdir()) == []

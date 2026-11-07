@@ -24,6 +24,10 @@ config_schema:
     type: int
     default: 24000
     description: Character budget for the whole Jeff request, so it stays under jeff-serve's 8192-token limit.
+  log:
+    type: bool
+    default: true
+    description: "false: write no shadow.jsonl."
   log_max_mb:
     type: int
     default: 50

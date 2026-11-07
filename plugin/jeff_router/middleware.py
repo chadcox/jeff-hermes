@@ -47,7 +47,7 @@ def _first_choice(response: Any) -> Any:
 
 
 class ShadowRouter:
-    def __init__(self, *, client: JeffClient, log: ShadowLog, cwd: Callable[[], str], max_request_chars: int,
+    def __init__(self, *, client: JeffClient, log: ShadowLog | None, cwd: Callable[[], str], max_request_chars: int,
                  slots: int = 2, main_thinking: bool = True, thinking_router: bool = False,
                  router_adapter: str = "code-router", router_threshold: float = 0.6) -> None:
         self._client = client
@@ -69,7 +69,7 @@ class ShadowRouter:
             return next_call()
         routed = self._main_thinking and self._thinking_router
         router = self._route(request) if routed else None
-        pending = self._start(request)
+        pending = self._start(request) if self._log is not None else _Pending()  # shadow answers feed only the log
         pending.router = router
         messages = request.get("messages") or []
         forced = self._forced(messages) if routed else []
@@ -230,6 +230,8 @@ class ShadowRouter:
         except Exception as error:
             self._warn("finish", error)
             action = None
+        if self._log is None:
+            return
         if pending.future is not None:
             pending.future.add_done_callback(lambda future: self._complete(pending, future, action, context))
             return
