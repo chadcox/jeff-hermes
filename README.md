@@ -170,6 +170,23 @@ tail -n1 ~/.hermes/plugin-data/agent-plugin-jeff_router-*/shadow.jsonl | python3
 `router.level` is `"off"` or `"xhigh"` (Jeff's choice), and `main_thinking` says whether the call actually
 thought. The full guide, with CPU setup, the systemd unit and exact versions, is **[docs/install.md](docs/install.md)**.
 
+## 🔒 What it touches
+
+When enabled, the plugin:
+
+- **Sends context over HTTP** to jeff-serve at `url` (default `http://127.0.0.1:8765`, local). Each main-turn call
+  sends a trimmed view of the conversation, tool names and candidate file paths. Point `url` at a remote host and
+  that context leaves your machine.
+- **Changes main-model requests.** With `main_thinking: false`, or when the thinking router decides not to think, it
+  sets `reasoning_effort: "none"` on main-turn `chat_completions` calls, whichever provider you use.
+- **Writes a log** of every call to `shadow.jsonl` in its Hermes plugin-data folder. Records include tool calls,
+  file paths and the router's view of the conversation state. It rotates above `log_max_mb`.
+- **Checks file paths** named in the conversation exist, relative to the session folder. It does not read their
+  contents.
+
+It runs no shell commands, starts no background processes beyond a small in-process thread pool, stores no
+credentials and sends no telemetry.
+
 ## 📚 Documentation
 
 | | |
