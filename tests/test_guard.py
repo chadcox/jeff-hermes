@@ -2,10 +2,11 @@ import json
 from types import SimpleNamespace as NS
 
 from jeff_router_under_test.guard import (
-    compare_texts, dice, failed_commands, find_runaway, first_runaway, repeated_action, shell_file_writes,
+    compare_texts, dice, failed_commands, find_runaway, first_runaway, previous_reply, repeated_action,
+    shell_file_writes,
     stuck_outputs,
 )
-from test_middleware import CONTEXT, HI, NextCall, make_routed, router_reply, main_text, wait_records
+from test_middleware import CONTEXT, HI, NextCall, make_router, make_routed, router_reply, main_text, wait_records
 
 
 def call(call_id, name, args):
@@ -114,7 +115,7 @@ def reply_text(text):
                                                                   tool_calls=None))])
 
 
-def test_failed_commands_force_thinking_despite_router_off(fake_jeff, tmp_path):
+def test_guard_forced_call_skips_jeff(fake_jeff, tmp_path):
     fake_jeff.reply = router_reply(0.0)
     router, log = make_routed(fake_jeff.url, tmp_path)
     fails = [step(f"c{i}", "terminal", {"command": "make"}, "error", 1) for i in range(2)]
@@ -124,6 +125,7 @@ def test_failed_commands_force_thinking_despite_router_off(fake_jeff, tmp_path):
     assert nxt.calls == [((), {})]
     rec = wait_records(log, 1)[0]
     assert rec["main_thinking"] is True and rec["guard"]["forced"][0]["rule"] == "failed_commands"
+    assert rec["router"] is None and router_asked(fake_jeff) == []  # the guard decided, so Jeff isn't asked
 
 
 def test_loop_with_thinking_off_is_logged_not_reasked(fake_jeff, tmp_path):
@@ -156,3 +158,79 @@ def test_no_trigger_means_one_call_and_no_guard(fake_jeff, tmp_path):
     router(request=HI, next_call=nxt, provider="local", **CONTEXT)
     assert len(nxt.calls) == 1
     assert wait_records(log, 1)[0]["guard"] is None
+
+
+# previous reply (recovery after a loop or runaway that could not be re-asked)
+
+def test_previous_reply_spots_a_loop_and_clears_on_a_new_action():
+    looped = history(step("c1", "read_file", {"path": "a.py"}), step("c2", "read_file", {"path": "a.py"}))
+    assert previous_reply(looped)["rule"] == "previous_loop"
+    moved_on = looped + step("c3", "terminal", {"command": "pytest"})
+    assert previous_reply(moved_on) is None
+    assert previous_reply(history()) is None
+
+
+def test_previous_reply_spots_a_runaway():
+    messages = history() + [{"role": "assistant", "content": "z" * 20000 + "round and round we go " * 40}]
+    assert previous_reply(messages)["rule"] == "previous_runaway"
+
+
+# guarded-off: main_thinking false, guards true
+
+def router_asked(fake_jeff):
+    return [r for r in fake_jeff.requests if r.get("model") == "code-router"]
+
+
+def test_guarded_off_sends_effort_none_and_never_asks_jeff(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
+    nxt = NextCall(main_text())
+    router(request=HI, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls == [(({**HI, "reasoning_effort": "none"},), {})]
+    rec = wait_records(log, 1)[0]
+    assert rec["main_thinking"] is False and rec["guard"] is None and rec["router"] is None
+    assert router_asked(fake_jeff) == []
+
+
+def test_guarded_off_thinks_on_failed_commands(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
+    fails = [step(f"c{i}", "terminal", {"command": "make"}, "error", 1) for i in range(2)]
+    request = {"messages": history(*fails), "tools": HI["tools"]}
+    nxt = NextCall(main_text())
+    router(request=request, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls == [((), {})]
+    rec = wait_records(log, 1)[0]
+    assert rec["main_thinking"] is True and rec["guard"]["forced"][0]["rule"] == "failed_commands"
+    assert router_asked(fake_jeff) == []
+
+
+def test_guarded_off_thinks_on_stuck_outputs(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
+    same = [step(f"c{i}", "terminal", {"command": f"python run{i}.py"}, "Traceback: boom") for i in range(3)]
+    nxt = NextCall(main_text())
+    router(request={"messages": history(*same), "tools": HI["tools"]}, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls == [((), {})]
+    assert wait_records(log, 1)[0]["guard"]["forced"][0]["rule"] == "stuck_outputs"
+
+
+def test_guarded_off_thinks_after_a_logged_loop_until_the_reply_changes(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
+    looped = history(step("c1", "read_file", {"path": "a.py"}), step("c2", "read_file", {"path": "a.py"}))
+    nxt = NextCall(main_text())
+    router(request={"messages": looped, "tools": HI["tools"]}, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls == [((), {})]
+    assert wait_records(log, 1)[0]["guard"]["forced"][0]["rule"] == "previous_loop"
+    moved_on = looped + step("c3", "terminal", {"command": "pytest"}, "3 passed in 0.12s")
+    nxt = NextCall(main_text())
+    router(request={"messages": moved_on, "tools": HI["tools"]}, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls[0][0][0]["reasoning_effort"] == "none"
+
+
+def test_guards_false_never_forces_thinking_or_logs_triggers(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False, guards=False)
+    fails = [step(f"c{i}", "terminal", {"command": "make"}, "error", 1) for i in range(2)]
+    request = {"messages": history(*fails), "tools": HI["tools"]}
+    nxt = NextCall(reply_text("z" * 20000 + "round and round we go " * 40))
+    router(request=request, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls[0][0][0]["reasoning_effort"] == "none"
+    rec = wait_records(log, 1)[0]
+    assert rec["main_thinking"] is False and rec["guard"] is None

@@ -1,12 +1,13 @@
 import json
 import logging
+import threading
 import time
 from types import SimpleNamespace as NS
 
 import pytest
 
 from conftest import ok_body
-from jeff_router_under_test import register
+from jeff_router_under_test import middleware, register
 from jeff_router_under_test.compare import MAX_ARGUMENT_CHARS
 from jeff_router_under_test.jeff_client import JeffClient
 from jeff_router_under_test.middleware import ShadowRouter
@@ -31,10 +32,12 @@ def main_read(path):
                                                                           tool_calls=[call]))])
 
 
-def make_router(url, tmp_path, *, timeout_s=2.0, max_request_chars=24000, cwd="", main_thinking=True):
+def make_router(url, tmp_path, *, timeout_s=2.0, max_request_chars=24000, cwd="", main_thinking=True, guards=True,
+                tool_shadow=True):
     log_path = tmp_path / "shadow.jsonl"
     router = ShadowRouter(client=JeffClient(url, timeout_s), log=ShadowLog(log_path, 10_000_000),
-                          cwd=lambda: cwd, max_request_chars=max_request_chars, main_thinking=main_thinking)
+                          cwd=lambda: cwd, max_request_chars=max_request_chars, main_thinking=main_thinking,
+                          guards=guards, tool_shadow=tool_shadow)
     return router, log_path
 
 
@@ -167,7 +170,7 @@ def test_no_tools_passes_through(fake_jeff, tmp_path):
     assert fake_jeff.requests == [] and records(log) == []
 
 
-def test_next_call_error_propagates_nothing_is_logged_and_slots_free(fake_jeff, tmp_path):
+def test_next_call_error_propagates_is_logged_and_slots_free(fake_jeff, tmp_path):
     router, log = make_router(fake_jeff.url, tmp_path)
     error = ConnectionError("model down")
     for _ in range(3):  # more failures than slots: each in-flight Jeff call must free its slot
@@ -175,9 +178,20 @@ def test_next_call_error_propagates_nothing_is_logged_and_slots_free(fake_jeff, 
             router(request=HI, next_call=NextCall(error=error), **CONTEXT)
         assert raised.value is error
         time.sleep(0.1)
-    assert records(log) == []
+    failed = wait_records(log, 3)
+    assert [r["main_error"] for r in failed] == ["ConnectionError"] * 3
+    assert all(r["main"] is None and r["main_cost"]["finish_reason"] is None for r in failed)
     router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
-    assert wait_records(log, 1)[0]["outcome"] == "ok"
+    ok = wait_records(log, 4)[3]
+    assert ok["outcome"] == "ok" and ok["main_error"] is None
+
+
+def test_logged_effort_is_the_one_sent_when_thinking_is_off(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, main_thinking=False)
+    request = {**HI, "extra_body": {"reasoning": {"enabled": True}}}
+    router(request=request, next_call=NextCall(main_text()), **CONTEXT)
+    [rec] = wait_records(log, 1)
+    assert rec["main_cost"]["effort"] == "none" and rec["main_thinking"] is False
 
 
 def test_jeff_failure_is_logged_and_response_returned(tmp_path):
@@ -218,7 +232,7 @@ def test_main_cost_without_usage_or_reasoning_is_null_and_logged_when_jeff_fails
 def test_questions_over_budget_skip_jeff_as_too_long(fake_jeff, tmp_path):
     router, log = make_router(fake_jeff.url, tmp_path, max_request_chars=50)
     router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
-    assert records(log)[0]["outcome"] == "too_long"  # written at once: Jeff was not asked
+    assert wait_records(log, 1)[0]["outcome"] == "too_long"  # Jeff was not asked
     assert fake_jeff.requests == []
 
 
@@ -237,7 +251,7 @@ def test_build_error_is_logged_not_raised(fake_jeff, tmp_path):
     router._cwd = lambda: (_ for _ in ()).throw(RuntimeError("no session"))
     expected = main_text()
     assert router(request=HI, next_call=NextCall(expected), **CONTEXT) is expected
-    assert records(log)[0]["outcome"] == "build_error"
+    assert wait_records(log, 1)[0]["outcome"] == "build_error"
 
 
 def wait_log(caplog, text, timeout=3.0):
@@ -254,7 +268,7 @@ def test_log_failure_never_raises_and_warns_once(fake_jeff, tmp_path, caplog):
     blocker = tmp_path / "file"
     blocker.write_text("not a dir")
     router = ShadowRouter(client=JeffClient(fake_jeff.url, 2.0), log=ShadowLog(blocker / "shadow.jsonl", 1000),
-                          cwd=lambda: "", max_request_chars=24000)
+                          cwd=lambda: "", max_request_chars=24000, tool_shadow=True)
     expected = main_text()
     for message in ("jeff_router: complete failed (", "jeff_router: complete failed again"):
         assert router(request=HI, next_call=NextCall(expected), **CONTEXT) is expected
@@ -266,7 +280,7 @@ def test_log_failure_never_raises_and_warns_once(fake_jeff, tmp_path, caplog):
 
 def test_register_wires_middleware_and_log_path(tmp_path, fake_jeff):
     registered, hooks = [], []
-    settings = {"url": fake_jeff.url}
+    settings = {"url": fake_jeff.url, "log": True}
     ctx = NS(get_config=lambda key, default: settings.get(key, default),
              register_middleware=lambda kind, fn: registered.append((kind, fn)),
              state=NS(data_dir=tmp_path / "plugin-data"), session_cwd=lambda: "", on_unload=hooks.append)
@@ -275,12 +289,26 @@ def test_register_wires_middleware_and_log_path(tmp_path, fake_jeff):
     assert kind == "llm_execution"
     assert hooks == [router.close]
     router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
-    assert wait_records(tmp_path / "plugin-data" / "shadow.jsonl", 1)[0]["outcome"] == "ok"
+    assert wait_records(tmp_path / "plugin-data" / "shadow.jsonl", 1)[0]["outcome"] == "not_asked"
+    assert fake_jeff.requests == []  # tool_shadow defaults off
 
 
-def test_log_false_writes_no_shadow_log(tmp_path, fake_jeff):
+def test_register_tool_shadow_setting_turns_on_the_tools_request(tmp_path, fake_jeff):
     registered = []
-    settings = {"url": fake_jeff.url, "log": False}
+    settings = {"url": fake_jeff.url, "log": True, "tool_shadow": True}
+    ctx = NS(get_config=lambda key, default: settings.get(key, default),
+             register_middleware=lambda kind, fn: registered.append((kind, fn)),
+             state=NS(data_dir=tmp_path / "plugin-data"), session_cwd=lambda: "")
+    register(ctx)
+    [(_, router)] = registered
+    router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
+    assert wait_records(tmp_path / "plugin-data" / "shadow.jsonl", 1)[0]["outcome"] == "ok"
+    router.close()
+
+
+def test_log_is_off_by_default(tmp_path, fake_jeff):
+    registered = []
+    settings = {"url": fake_jeff.url}
     ctx = NS(get_config=lambda key, default: settings.get(key, default),
              register_middleware=lambda kind, fn: registered.append((kind, fn)),
              state=NS(data_dir=tmp_path / "plugin-data"), session_cwd=lambda: "")
@@ -424,7 +452,7 @@ def test_router_failure_keeps_thinking(fake_jeff, tmp_path):
     router(request=HI, next_call=nxt, provider="local", **CONTEXT)
     assert nxt.calls == [((), {})]
     rec = wait_records(log, 1)[0]
-    assert rec["router"] == {"level": "xhigh", "outcome": "server_error", "ms": rec["router"]["ms"],
+    assert rec["router"] == {"level": "xhigh", "outcome": "server_error", "ms": rec["router"]["ms"], "attempts": 1,
                              "probabilities": None}
 
 
@@ -452,3 +480,99 @@ def test_log_off_still_routes_but_skips_the_shadow_question(fake_jeff, tmp_path)
     assert [r["model"] for r in fake_jeff.requests] == ["code-router"]  # no "tools" shadow question
     assert result is expected
     assert list(tmp_path.iterdir()) == []
+
+
+def test_router_skips_jeff_and_thinks_when_max_request_chars_is_tiny(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, max_request_chars=50)
+    router._thinking_router = True
+    nxt = NextCall(main_text())
+    router(request=HI, next_call=nxt, provider="local", **CONTEXT)
+    assert nxt.calls == [((), {})]
+    rec = wait_records(log, 1)[0]
+    assert rec["router"]["outcome"] == "too_long" and rec["router"]["level"] == "xhigh"
+    assert [r for r in fake_jeff.requests if r.get("model") == "code-router"] == []
+
+
+def test_router_request_stays_within_max_request_chars(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, max_request_chars=6000)
+    router._thinking_router = True
+    request = {**HI, "messages": [{"role": "user", "content": "q" * 100000}]}
+    router(request=request, next_call=NextCall(main_text()), provider="local", **CONTEXT)
+    wait_records(log, 1)
+    sent = [r for r in fake_jeff.requests if r.get("model") == "code-router"]
+    assert len(sent) == 1 and len(json.dumps(sent[0], ensure_ascii=False)) <= 6000
+
+
+def test_tool_shadow_off_logs_the_decision_without_a_tools_request(fake_jeff, tmp_path):
+    fake_jeff.reply = (200, ok_body({"q": {"off": 0.9, "low": 0.0, "medium": 0.0, "xhigh": 0.1}}))
+    router, log = make_router(fake_jeff.url, tmp_path, tool_shadow=False)
+    router._thinking_router = True
+    nxt = NextCall(main_text())
+    router(request=HI, next_call=nxt, provider="local", **CONTEXT)
+    rec = wait_records(log, 1)[0]
+    assert [r.get("model") for r in fake_jeff.requests] == ["code-router"]
+    assert rec["outcome"] == "not_asked" and rec["tool"] is None and rec["state"] is None
+    assert rec["router"]["level"] == "off" and rec["main_thinking"] is False and rec["main_cost"] is not None
+
+
+def test_tool_shadow_on_sends_the_tools_request(fake_jeff, tmp_path):
+    router, log = make_router(fake_jeff.url, tmp_path, tool_shadow=True)
+    router(request=HI, next_call=NextCall(main_text()), provider="local", **CONTEXT)
+    wait_records(log, 1)
+    assert [r.get("model") for r in fake_jeff.requests] == ["tools"]
+
+
+class BlockingLog:
+    """A log whose writes wait until released, standing in for a slow disk or contended flock."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.written = []
+
+    def append(self, record):
+        self.release.wait(5)
+        self.written.append(record)
+
+
+def blocking_router(fake_jeff, **kwargs):
+    log = BlockingLog()
+    router = ShadowRouter(client=JeffClient(fake_jeff.url, 2.0), log=log, cwd=lambda: "", max_request_chars=24000,
+                          **kwargs)
+    return router, log
+
+
+def test_blocked_log_writer_does_not_block_the_response(fake_jeff):
+    router, log = blocking_router(fake_jeff)
+    expected = main_text()
+    started = time.monotonic()
+    for _ in range(3):
+        assert router(request=HI, next_call=NextCall(expected), **CONTEXT) is expected
+    assert time.monotonic() - started < 1.0 and log.written == []
+    log.release.set()
+    deadline = time.monotonic() + 3
+    while len(log.written) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(log.written) == 3
+
+
+def test_full_log_queue_drops_records_and_warns_once(fake_jeff, monkeypatch, caplog):
+    monkeypatch.setattr(middleware, "WRITE_QUEUE", 2)
+    router, log = blocking_router(fake_jeff)
+    for _ in range(6):  # one is taken by the blocked writer, two wait in the queue, the rest are dropped
+        router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "dropping records" in r.getMessage()]
+    assert len(warnings) == 1
+    log.release.set()
+    router.close()
+    router._writer_thread.join(3)
+    assert 2 <= len(log.written) <= 3  # the queue's two, plus one the writer may already have held
+
+
+def test_close_writes_queued_records_and_stops_the_writer(fake_jeff, tmp_path):
+    router, log_path = make_router(fake_jeff.url, tmp_path)
+    for _ in range(3):
+        router(request=HI, next_call=NextCall(main_text()), **CONTEXT)
+    router.close()
+    router._writer_thread.join(3)
+    assert not router._writer_thread.is_alive()
+    assert len(records(log_path)) == 3

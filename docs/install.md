@@ -11,7 +11,7 @@ Jeff's `pyproject.toml` needs uv ≥ 0.12.19. If your uv is older, run a newer o
 
 ```sh
 cd ~/jeff-hermes
-git clone https://github.com/firelex/jeff vendor/jeff     # tested at 3720e7c
+git clone https://github.com/firelex/jeff vendor/jeff && git -C vendor/jeff checkout 3720e7c   # tested revision
 UV="uvx --from uv>=0.12.19 uv"
 ```
 
@@ -54,7 +54,7 @@ for n in tools code-router triage; do
 done
 ```
 
-The thinking router uses only `code-router`. The `tools` adapter powers the shadow log.
+The thinking router uses only `code-router`. The `tools` adapter is needed only if you set `tool_shadow: true`.
 
 ## 2. Run jeff-serve
 
@@ -96,7 +96,8 @@ Restart Hermes, including the gateway if you use one. Plugins load at startup.
 
 ## 4. Check it
 
-Run a turn, then look at the newest log record:
+The log is off by default. Set `log: true` under the plugin's settings (see [configuration.md](configuration.md)),
+restart Hermes, run a turn, then look at the newest log record:
 
 ```sh
 tail -n1 ~/.hermes/plugin-data/agent-plugin-jeff_router-*/shadow.jsonl | python3 -m json.tool

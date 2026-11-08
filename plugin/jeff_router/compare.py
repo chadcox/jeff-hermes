@@ -61,7 +61,10 @@ def main_cost(request: Any, response: Any, ms: int) -> dict[str, Any]:
     extra = request.get("extra_body") if isinstance(request, dict) else None
     reasoning = _get(message, "reasoning_content") or _get(message, "reasoning")
     content = _get(message, "content")
-    return {"ms": ms, "effort": extra.get("reasoning") if isinstance(extra, dict) else None,
+    effort = request.get("reasoning_effort") if isinstance(request, dict) else None
+    if effort is None and isinstance(extra, dict):
+        effort = extra.get("reasoning")
+    return {"ms": ms, "effort": effort,
             "finish_reason": _get(choice, "finish_reason"),
             "prompt_tokens": _get(usage, "prompt_tokens"), "completion_tokens": _get(usage, "completion_tokens"),
             "reasoning_chars": len(reasoning) if isinstance(reasoning, str) else 0,

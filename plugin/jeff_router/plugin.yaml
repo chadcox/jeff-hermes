@@ -26,8 +26,12 @@ config_schema:
     description: Character budget for the whole Jeff request, so it stays under jeff-serve's 8192-token limit.
   log:
     type: bool
-    default: true
-    description: "false: write no shadow.jsonl."
+    default: false
+    description: "true: write a shadow.jsonl record of every main-turn call (contains conversation snippets and paths)."
+  tool_shadow:
+    type: bool
+    default: false
+    description: "true: with log on, also ask Jeff's tools adapter to predict each call's tool and read target, and log how often it agreed (research; needs the tools adapter). false: log only the thinking decision, guards and main-model cost."
   log_max_mb:
     type: int
     default: 50
@@ -40,6 +44,10 @@ config_schema:
     type: bool
     default: false
     description: "true: before each main-turn chat_completions call, ask Jeff's router adapter whether to think (Jeff-Code's jeff-off-unless rule); thinking is turned off unless P(xhigh) >= router_threshold."
+  guards:
+    type: bool
+    default: true
+    description: "true: run the stuck-output, failed-command, loop and runaway guards on every main-turn call. Stuck outputs, failed commands, or a previous reply that looped or ran away turn thinking on for the call, even with main_thinking false (guarded-off). false: never force thinking."
   router_adapter:
     type: str
     default: code-router

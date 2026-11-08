@@ -40,6 +40,7 @@ def register(ctx: Any) -> None:
     router = ShadowRouter(client=JeffClient(settings["url"], settings["timeout_s"]), log=log, cwd=_cwd_reader(ctx),
                           max_request_chars=int(settings["max_request_chars"]),
                           main_thinking=settings["main_thinking"], thinking_router=settings["thinking_router"],
+                          guards=settings["guards"], tool_shadow=settings["tool_shadow"],
                           router_adapter=settings["router_adapter"], router_threshold=settings["router_threshold"])
     ctx.register_middleware("llm_execution", router)
     on_unload = getattr(ctx, "on_unload", None)

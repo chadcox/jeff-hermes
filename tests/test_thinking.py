@@ -1,3 +1,4 @@
+import time
 import json
 
 from conftest import ok_body
@@ -95,3 +96,74 @@ def test_ask_level_thinks_when_jeff_fails_and_retries_busy(fake_jeff):
     replies = [(529, b"busy"), (200, ok_body({"q": {"off": 0.9, "xhigh": 0.1}}))]
     fake_jeff.reply = lambda body: replies.pop(0)
     assert ask_level(client, "code-router", "s", 0.6)[0] == "off"
+
+
+def test_ask_level_nan_xhigh_keeps_thinking(fake_jeff):
+    client = JeffClient(fake_jeff.url, 2.0)
+    fake_jeff.reply = (200, ok_body({"q": {"off": 0.9, "xhigh": float("nan")}}))
+    level, result = ask_level(client, "code-router", "s", 0.6)
+    assert (level, result.outcome) == ("xhigh", "bad_response")
+
+
+def test_ask_level_missing_xhigh_is_bad_response(fake_jeff):
+    client = JeffClient(fake_jeff.url, 2.0)
+    fake_jeff.reply = (200, ok_body({"q": {"off": 0.9, "low": 0.1}}))
+    level, result = ask_level(client, "code-router", "s", 0.6)
+    assert (level, result.outcome) == ("xhigh", "bad_response")
+
+
+def test_ask_level_logs_total_time_and_attempts_across_busy_retries(fake_jeff):
+    replies = [(529, b"busy"), (200, ok_body({"q": {"off": 0.9, "low": 0.0, "medium": 0.0, "xhigh": 0.1}}))]
+    fake_jeff.reply = lambda body: replies.pop(0)
+    started = time.monotonic()
+    level, result = ask_level(JeffClient(fake_jeff.url, 2.0), "code-router", "s", 0.6)
+    elapsed_ms = (time.monotonic() - started) * 1000
+    assert level == "off" and result.attempts == 2
+    assert result.ms >= 50 and result.ms <= elapsed_ms + 1  # includes the 50 ms wait between attempts
+
+
+# 3.1 budgeting the whole router input
+
+def size(text):
+    return len(json.dumps(text, ensure_ascii=False)) - 2
+
+
+def terminal(call_id, command, output):
+    return [{"role": "assistant", "tool_calls": [{"id": call_id, "type": "function", "function": {
+                "name": "terminal", "arguments": json.dumps({"command": command})}}]},
+            {"role": "tool", "tool_call_id": call_id, "content": json.dumps({"output": output, "exit_code": 0})}]
+
+
+def test_render_state_without_budget_is_unchanged_for_small_input():
+    messages = [{"role": "user", "content": "fix it"}] + terminal("c1", "ls", "a.py")
+    assert render_state(messages) == render_state(messages, 24000)
+
+
+def test_long_first_task_stays_in_budget_and_keeps_the_newest_step():
+    messages = [{"role": "user", "content": "do this " * 20000}] + terminal("c1", "pytest", "3 passed")
+    state = render_state(messages, 20000)
+    assert size(state) <= 20000 and state.startswith("Task:\ndo this") and "[...]" in state
+    assert "$ pytest\n3 passed" in state
+
+
+def test_long_follow_ups_keep_the_current_instruction():
+    messages = ([{"role": "user", "content": "build the app"}]
+                + [{"role": "user", "content": "x" * 30000} for _ in range(3)]
+                + [{"role": "user", "content": "now add tests"}] + terminal("c1", "ls", "a.py"))
+    state = render_state(messages, 20000)
+    assert size(state) <= 20000
+    assert "build the app" in state and "now add tests" in state and "[3 earlier user updates not shown]" in state
+
+
+def test_forty_max_width_lines_are_cut_not_dropped():
+    output = "\n".join("y" * 200 for _ in range(40))
+    messages = [{"role": "user", "content": "go"}] + terminal("c1", "ls", "a") + terminal("c2", "make", output)
+    state = render_state(messages)
+    assert "No steps have been taken yet." not in state and "$ make" in state and "[...]" in state
+    budgeted = render_state(messages, 6000)
+    assert size(budgeted) <= 6000 and "$ make" in budgeted
+
+
+def test_too_small_a_budget_returns_none():
+    messages = [{"role": "user", "content": "go"}] + terminal("c1", "make", "z" * 5000)
+    assert render_state(messages, 10) is None

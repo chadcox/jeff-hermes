@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shlex
 import time
+from dataclasses import replace
 from typing import Any
 
 from .jeff_client import JeffClient, JeffResult
@@ -93,10 +94,52 @@ def _cut_lines(text: str, from_end: bool) -> str:
     return "\n".join(shown + ([f"[{dropped} more lines of this command not shown]"] if dropped else []))
 
 
-def render_state(messages: list[Any]) -> str:
-    """Jeff-Code's renderState(trimState(task, steps)) over a Hermes chat-completions message list."""
+def _size(text: str) -> int:
+    """Characters text takes inside a JSON request body."""
+    return len(json.dumps(text, ensure_ascii=False)) - 2
+
+
+def _clip(text: str, limit: int, keep_end: bool) -> str | None:
+    """text cut to at most limit JSON characters, marked where it was cut; None if nothing useful fits."""
+    if _size(text) <= limit:
+        return text
+    marker = "[...]"
+    keep = limit - len(marker)
+    while keep > 0:
+        out = marker + text[-keep:] if keep_end else text[:keep] + marker
+        over = _size(out) - limit
+        if over <= 0:
+            return out
+        keep -= over
+    return None
+
+
+def _fit_task(users: list[str], limit: int) -> str | None:
+    """The task and user updates within limit: the first and latest messages are kept, cut if needed, and the
+    updates between them are replaced by a note."""
+    sep = "\n\nUser update:\n"
+    full = sep.join(users)
+    if _size(full) <= limit:
+        return full
+    if len(users) == 1:
+        return _clip(users[0], limit, keep_end=False)
+    middle = len(users) - 2
+    note = f"[{middle} earlier user updates not shown]{sep}" if middle else ""
+    room = limit - _size(sep + note)
+    latest = _clip(users[-1], max(room - _size(users[0]), room // 2), keep_end=False)
+    first = None if latest is None else _clip(users[0], room - _size(latest), keep_end=False)
+    if latest is None or first is None:
+        return None
+    return first + sep + note + latest
+
+
+def render_state(messages: list[Any], budget: int | None = None) -> str | None:
+    """Jeff-Code's renderState(trimState(task, steps)) over a Hermes chat-completions message list.
+
+    With a budget (JSON characters) the whole state fits in it: steps get at most half, the newest step is cut
+    rather than dropped, and the task keeps its first and latest messages. None means even that can't fit."""
     users = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-    task = "\n\nUser update:\n".join(_text(m.get("content")) for m in users)
+    user_texts = [_text(m.get("content")) for m in users]
     results = {m.get("tool_call_id"): m for m in messages if isinstance(m, dict) and m.get("role") == "tool"}
     steps: list[tuple[str, str | None, bool]] = []
     for message in messages:
@@ -113,19 +156,25 @@ def render_state(messages: list[Any]) -> str:
             result = results.get(call.get("id"))
             output, error = (None, False) if result is None else _output(result.get("content"))
             steps.append((shell_command(str(function.get("name")), args), output, error))
+    step_limit = STEP_BUDGET_CHARS if budget is None else min(STEP_BUDGET_CHARS, budget // 2)
     kept: list[tuple[str, str | None, bool]] = []
     used = 0
     for command, output, error in reversed(steps):
         shown_output = None if output is None else _cut_lines(output, from_end=True)
         shown_command = _cut_lines(command, from_end=False)
         cost = len(shown_output or "") + len(shown_command)
-        if used + cost > STEP_BUDGET_CHARS:
+        if not kept and cost > step_limit:  # the newest step alone is too big: cut it rather than drop it
+            shown_command = _clip(shown_command, step_limit // 4, keep_end=False) or ""
+            if shown_output is not None:
+                shown_output = _clip(shown_output, step_limit - _size(shown_command), keep_end=True) or ""
+            cost = _size(shown_output or "") + _size(shown_command)
+        if used + cost > step_limit:
             break
         used += cost
         kept.append((shown_command, shown_output, error))
     kept.reverse()
     left_out = len(steps) - len(kept)
-    parts = [f"Task:\n{task}"]
+    parts: list[str] = []
     if not kept:
         parts.append("No steps have been taken yet.")
     else:
@@ -135,23 +184,39 @@ def render_state(messages: list[Any]) -> str:
             note = "; the command reported an error" if error else ""
             parts.append(f"Step {index} (by the coding model{note}):\n$ {command}\n"
                          f"{output if output is not None else '(no output was recorded)'}")
-    return "\n\n".join(parts)
+    rest = "\n\n".join(parts)
+    if budget is None:
+        return "Task:\n" + "\n\nUser update:\n".join(user_texts) + "\n\n" + rest
+    task = _fit_task(user_texts, budget - _size(f"Task:\n\n\n{rest}"))
+    if task is None:
+        return None
+    state = f"Task:\n{task}\n\n{rest}"
+    return state if _size(state) <= budget else None
+
+
+def router_body(adapter: str, state: str) -> dict[str, Any]:
+    return {"model": adapter, "state": state,
+            "questions": {"q": {"type": "choice", "instructions": ROUTER_QUESTION, "criteria": ROUTER_OPTIONS}}}
 
 
 def ask_level(client: JeffClient, adapter: str, state: str, threshold: float) -> tuple[str, JeffResult]:
     """"off" or "xhigh" by the jeff-off-unless rule; "xhigh" whenever Jeff gives no usable answer."""
-    body = {"model": adapter, "state": state,
-            "questions": {"q": {"type": "choice", "instructions": ROUTER_QUESTION, "criteria": ROUTER_OPTIONS}}}
+    body = router_body(adapter, state)
+    started = time.monotonic()
     result = client.ask(body)
+    attempts = 1
     for _ in range(BUSY_RETRIES):
         if result.outcome != "busy":
             break
         time.sleep(0.05)
         result = client.ask(body)
+        attempts += 1
+    # ms covers every attempt and the waits between them, not just the last request
+    result = replace(result, ms=round((time.monotonic() - started) * 1000, 1), attempts=attempts)
     if result.outcome != "ok":
         return "xhigh", result
     probabilities = (result.answers or {}).get("q", {}).get("probabilities", {})
     p_xhigh = probabilities.get("xhigh")
     if not isinstance(p_xhigh, (int, float)):
-        return "xhigh", result
+        return "xhigh", replace(result, outcome="bad_response", detail="no xhigh probability")
     return ("xhigh" if p_xhigh >= threshold else "off"), result

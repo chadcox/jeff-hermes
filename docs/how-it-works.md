@@ -18,10 +18,10 @@ sequenceDiagram
     participant M as Main model
 
     H->>P: main-turn request (messages + tools)
+    P->>P: guard: stuck outputs / failed commands / previous loop? → force thinking, skip Jeff
     P->>P: render state: task + last steps (≤ 8,000 chars)
     P->>J: "how much should it think?" (code-router adapter)
     J-->>P: P(off), P(low), P(medium), P(xhigh)  ~70 ms on GPU
-    P->>P: guard: stuck outputs / failed commands? → force thinking
     alt P(xhigh) ≥ threshold or forced
         P->>M: request (thinking on)
     else
@@ -59,21 +59,28 @@ These are ported from Jeff-Code's `loop-guard.ts`, `runaway.ts` and `thinking-co
 | **Failed commands** | The last 2 terminal commands both failed | Think on this call |
 | **Runaway** | The reply repeats a piece of text or a line many times (over 20,000 chars) | Log it in `guard` |
 | **Loop** | Thinking was off and the reply repeats a recent tool call with nothing changed in between | Log it in `guard` |
+| **Previous reply** | The last assistant reply in the history ran away, or repeated an earlier action with nothing changed | Think on this call |
 
 Runaway and loop replies are not re-asked: Hermes makes `next_call` single-use per middleware, so the plugin can't
-call the provider a second time. The reply is returned as is.
+call the provider a second time. The reply is returned as is. The next calls think instead (the previous-reply guard),
+until the latest reply is a new action. The check is made on the history each call, so no state is kept.
+
+The guards run whenever `guards: true` (the default), whether or not Jeff is asked. With `main_thinking: false` that
+gives guarded-off: no thinking unless a guard fires.
 
 ### 4. Log
 
 After the reply, a background thread writes one JSONL record. The record holds the router decision, the guards, the
-main model's cost (wall time, tokens, reasoning characters) and the shadow comparison. Writing it never delays the
-turn. See [configuration.md](configuration.md#the-log).
+main model's cost (wall time, tokens, reasoning characters) and, with `tool_shadow: true`, the shadow comparison.
+Writing it never delays the turn: records wait in a queue of up to 1,000, and if the disk falls that far behind, new
+records are dropped with a one-time warning. On unload, queued records are still written. See [configuration.md](configuration.md#the-log).
 
 ## Shadow mode (v1)
 
 Before the thinking router, v1 of this project ran Jeff in **shadow mode**. Jeff's `tools` adapter predicted which
 tool the agent would call next, and the plugin logged that prediction beside what the main model actually did,
-without changing anything. The shadow comparison still runs on every call and feeds `tools/shadow_report.py`.
+without changing anything. The shadow comparison is now off by default. Set `tool_shadow: true` to run it on every call and feed
+`tools/shadow_report.py`.
 
 The shadow data is the reason the project moved to thinking routing. On real Hermes traffic, predicting tools
 offered little. Deciding whether to *think* was where the time and tokens went. See

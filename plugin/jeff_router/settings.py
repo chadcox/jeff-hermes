@@ -9,10 +9,12 @@ DEFAULTS: dict[str, Any] = {
     "url": "http://127.0.0.1:8765",
     "timeout_s": 2.0,
     "max_request_chars": 24000,
-    "log": True,
+    "log": False,
     "log_max_mb": 50,
+    "tool_shadow": False,
     "main_thinking": True,
     "thinking_router": False,
+    "guards": True,
     "router_adapter": "code-router",
     "router_threshold": 0.6,
 }
@@ -43,7 +45,8 @@ def read_settings(get_config: Callable[[str, Any], Any]) -> dict[str, Any]:
                 value = default
         except Exception:
             value = default
-        settings[key] = value if _valid(default, value) else default
+        zero_threshold = key == "router_threshold" and value == 0 and not isinstance(value, bool)
+        settings[key] = value if zero_threshold or _valid(default, value) else default
     if settings["router_threshold"] > 1:
         settings["router_threshold"] = DEFAULTS["router_threshold"]
     return settings

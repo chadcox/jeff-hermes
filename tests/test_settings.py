@@ -7,8 +7,8 @@ def test_defaults_when_nothing_configured():
 
 def test_valid_values_are_used():
     given = {"enabled": False, "url": "http://127.0.0.1:9999", "timeout_s": 1.5, "max_request_chars": 12000,
-             "log": False, "log_max_mb": 5, "main_thinking": False, "thinking_router": True, "router_adapter": "r",
-             "router_threshold": 0.7}
+             "log": True, "log_max_mb": 5, "main_thinking": False, "thinking_router": True, "router_adapter": "r",
+             "router_threshold": 0.7, "guards": False, "tool_shadow": True}
     assert read_settings(lambda key, default: given.get(key, default)) == given
 
 
@@ -50,3 +50,10 @@ def test_v0_1_strata_thinking_name_still_works():
     assert read_settings(lambda key, default: {"strata_thinking": False}.get(key, default))["main_thinking"] is False
     both = {"strata_thinking": False, "main_thinking": True}
     assert read_settings(lambda key, default: both.get(key, default))["main_thinking"] is True
+
+
+def test_router_threshold_zero_is_kept():
+    assert read_settings(lambda key, default: 0 if key == "router_threshold" else default)["router_threshold"] == 0
+    assert read_settings(lambda key, default: 0.0 if key == "router_threshold" else default)["router_threshold"] == 0.0
+    assert read_settings(lambda key, default: False if key == "router_threshold" else default)["router_threshold"] == 0.6
+    assert read_settings(lambda key, default: 0 if key == "timeout_s" else default)["timeout_s"] == 2.0

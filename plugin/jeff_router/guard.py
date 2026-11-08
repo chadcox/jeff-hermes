@@ -314,3 +314,23 @@ def failed_commands(messages: list[Any]) -> dict[str, Any] | None:
             return None
         last_lines.append(shown.rstrip().split("\n")[-1])
     return {"rule": "failed_commands", "last_lines": last_lines}
+
+
+def previous_reply(messages: list[Any]) -> dict[str, Any] | None:
+    """The last assistant reply in the history ran away, or repeated an earlier action with no file changed.
+
+    Hermes can't re-ask a looped or runaway reply, so the next calls think instead. The check is made on the history
+    each call, so it stops as soon as the latest reply is a new action."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            break
+    else:
+        return None
+    for key in ("reasoning_content", "reasoning", "content"):
+        text = message.get(key)
+        hit = first_runaway(text) if isinstance(text, str) else None
+        if hit:
+            return {"rule": "previous_runaway", "where": key, "runaway": hit}
+    repeat = repeated_action(messages[:index], list(message.get("tool_calls") or []))
+    return {"rule": "previous_loop", **repeat} if repeat else None

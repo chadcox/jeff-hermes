@@ -41,8 +41,9 @@ big model still does all the work. It just doesn't spend thinking tokens on easy
 - **🛡️ Safety net.** Ported from Jeff-Code's loop and runaway guards. Thinking is forced back on when tool outputs
   get stuck or commands keep failing. Runaway and looping replies are detected and logged. Hermes allows only
   one provider call per middleware, so they can't be re-asked.
-- **🔌 Works with any provider.** Anything on Hermes' `chat_completions` API mode works: llama.cpp, vLLM, Ollama,
-  OpenRouter, other OpenAI-compatible servers. Other API modes pass through and are logged.
+- **🔌 Built for `chat_completions` providers.** Tested with local llama.cpp. vLLM, Ollama, OpenRouter and other
+  OpenAI-compatible servers on Hermes' `chat_completions` API mode should work but are untested. Other API modes pass
+  through and are logged.
 - **🧯 Fails safe.** If Jeff is down, slow or busy, the call thinks as normal. The plugin never breaks a turn.
 - **📊 Fully logged.** Every call records Jeff's decision, its probabilities, the guards, and the main model's cost
   (time, tokens, reasoning characters) in an owner-only JSONL log, with a report tool to summarise it.
@@ -119,7 +120,7 @@ You need Hermes, [uv](https://docs.astral.sh/uv/), and an NVIDIA GPU (a CPU work
 
 ```sh
 git clone https://github.com/chadcox/jeff-hermes && cd jeff-hermes
-git clone https://github.com/firelex/jeff vendor/jeff
+git clone https://github.com/firelex/jeff vendor/jeff && git -C vendor/jeff checkout 3720e7c   # tested revision
 UV="uvx --from uv>=0.12.19 uv"
 $UV venv -p 3.12 .venv-gpu && VIRTUAL_ENV=$PWD/.venv-gpu $UV pip install -e 'vendor/jeff[lora,cuda]'
 .venv-gpu/bin/hf download mstrasser/jeff-base --revision v1.3 --local-dir models/jeff-base-v1.3
@@ -179,9 +180,9 @@ When enabled, the plugin:
   that context leaves your machine.
 - **Changes main-model requests.** With `main_thinking: false`, or when the thinking router decides not to think, it
   sets `reasoning_effort: "none"` on main-turn `chat_completions` calls, whichever provider you use.
-- **Writes a log** of every call to `shadow.jsonl` in its Hermes plugin-data folder. Records include tool calls,
-  file paths and the router's view of the conversation state. It rotates above `log_max_mb`.
-  Set `log: false` to turn it off.
+- **Can write a log** of every call to `shadow.jsonl` in its Hermes plugin-data folder, if you set `log: true`
+  (off by default). Records include tool calls, file paths and the router's view of the conversation state, which
+  can contain credentials from shell arguments. It rotates above `log_max_mb`.
 - **Checks file paths** named in the conversation exist, relative to the session folder. It does not read their
   contents.
 

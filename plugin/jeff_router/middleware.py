@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -14,16 +15,17 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .compare import _get, logged_action, main_action, main_cost, pick, read_match, tool_match
-from .guard import failed_commands, first_runaway, repeated_action, stuck_outputs
+from .guard import failed_commands, first_runaway, previous_reply, repeated_action, stuck_outputs
 from .jeff_client import JeffClient, JeffResult
 from .options import (
     READ_INSTRUCTIONS, TOOL_INSTRUCTIONS, ReadOptions, ToolOptions, build_read_options, build_tool_options,
 )
 from .shadow_log import ShadowLog
 from .state import build_state, fit_state
-from .thinking import ask_level, render_state
+from .thinking import ask_level, render_state, router_body
 
 logger = logging.getLogger(__name__)
+WRITE_QUEUE = 1000  # log records waiting for the writer thread; beyond this they are dropped
 _ENVELOPE_CHARS = 64  # {"model": "tools", "state": , "questions": } around state and questions
 
 
@@ -38,6 +40,7 @@ class _Pending:
     cost: dict[str, Any] | None = None
     main_thinking: bool = True
     router: dict[str, Any] | None = None
+    main_error: str | None = None
     guard: dict[str, Any] | None = None
 
 
@@ -48,11 +51,14 @@ def _first_choice(response: Any) -> Any:
 
 class ShadowRouter:
     def __init__(self, *, client: JeffClient, log: ShadowLog | None, cwd: Callable[[], str], max_request_chars: int,
-                 slots: int = 2, main_thinking: bool = True, thinking_router: bool = False,
+                 slots: int = 2, main_thinking: bool = True, thinking_router: bool = False, guards: bool = True,
+                 tool_shadow: bool = False,
                  router_adapter: str = "code-router", router_threshold: float = 0.6) -> None:
         self._client = client
         self._main_thinking = main_thinking
         self._thinking_router = thinking_router
+        self._guards = guards
+        self._tool_shadow = tool_shadow
         self._router_adapter = router_adapter
         self._router_threshold = router_threshold
         self._log = log
@@ -62,30 +68,42 @@ class ShadowRouter:
         self._executor = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="jeff_router")
         self._warned: set[str] = set()
         self._closed = False
+        self._writes: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue(maxsize=WRITE_QUEUE)
+        self._writer_thread = threading.Thread(target=self._writer, name="jeff_router-log", daemon=True)
+        if log is not None:  # log writes never run on the agent's thread
+            self._writer_thread.start()
 
     def __call__(self, request: Any = None, next_call: Any = None, **context: Any) -> Any:
         if self._closed or not self._gated(request, context):
             self._note_skipped_api_mode(context.get("api_mode"))
             return next_call()
-        routed = self._main_thinking and self._thinking_router
-        router = self._route(request) if routed else None
-        pending = self._start(request) if self._log is not None else _Pending()  # shadow answers feed only the log
-        pending.router = router
         messages = request.get("messages") or []
-        forced = self._forced(messages) if routed else []
+        forced = self._forced(messages) if self._guards else []
+        routed = self._main_thinking and self._thinking_router
+        router = self._route(request) if routed and not forced else None  # a guard already decided: skip Jeff
+        # tool-shadow answers feed only the log; without them the record holds the decision, guards and cost
+        pending = self._start(request) if self._log is not None and self._tool_shadow else _Pending(outcome="not_asked")
+        pending.router = router
         if forced:
             pending.guard = {"forced": forced}
-        thinking = self._main_thinking and (bool(forced) or router is None or router["level"] != "off")
+        thinking = bool(forced) or (self._main_thinking and (router is None or router["level"] != "off"))
+        sent = request if thinking else {**request, "reasoning_effort": "none"}
         started = time.monotonic()
-        response = self._call(request, next_call, thinking)
-        trigger = self._trigger(messages, response, thinking) if routed else None
+        try:
+            # llama.cpp honours reasoning_effort "none"; it ignores extra_body.reasoning.enabled
+            response = next_call() if thinking else next_call(sent)
+        except Exception as error:
+            pending.main_thinking, pending.main_error = thinking, type(error).__name__
+            self._finish(pending, sent, None, round((time.monotonic() - started) * 1000), context)
+            raise
+        trigger = self._trigger(messages, response, thinking) if self._guards else None
         if trigger is not None:
             # Hermes' next_call is single-use per frame, so a triggered reply cannot be re-asked:
             # log the trigger and the reply's cost, and return the reply it already produced.
             pending.guard = {**(pending.guard or {}), "trigger": trigger,
-                             "reply": self._safe_cost(request, response, round((time.monotonic() - started) * 1000))}
+                             "reply": self._safe_cost(sent, response, round((time.monotonic() - started) * 1000))}
         pending.main_thinking = thinking
-        self._finish(pending, request, response, round((time.monotonic() - started) * 1000), context)
+        self._finish(pending, sent, response, round((time.monotonic() - started) * 1000), context)
         if not thinking and pending.cost is not None and pending.cost["reasoning_chars"] > 0:
             self._note_once(f"leak:{context.get('provider')}:{context.get('model')}",
                             "jeff_router: thinking was turned off but %s/%s still returned %d reasoning chars; "
@@ -103,15 +121,12 @@ class ShadowRouter:
             self._warned.add(key)
             logger.warning(message, *args)
 
-    @staticmethod
-    def _call(request: dict[str, Any], next_call: Any, thinking: bool) -> Any:
-        # llama.cpp honours reasoning_effort "none"; it ignores extra_body.reasoning.enabled
-        return next_call() if thinking else next_call({**request, "reasoning_effort": "none"})
-
     def _forced(self, messages: list[Any]) -> list[dict[str, Any]]:
-        """Jeff-Code forces thinking when the last outputs are stuck or the last commands failed. Never raises."""
+        """Jeff-Code forces thinking when the last outputs are stuck or the last commands failed; a previous reply
+        that looped or ran away (it could not be re-asked) forces it on the following calls until the reply changes.
+        Never raises."""
         try:
-            return [hit for hit in (stuck_outputs(messages), failed_commands(messages)) if hit]
+            return [hit for hit in (stuck_outputs(messages), failed_commands(messages), previous_reply(messages)) if hit]
         except Exception as error:
             self._warn("forced", error)
             return []
@@ -157,14 +172,44 @@ class ShadowRouter:
         slots; their records are still written."""
         self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._log is not None:  # once running calls have queued their records, let the writer drain and exit
+            threading.Thread(target=self._stop_writer, name="jeff_router-unload", daemon=True).start()
+
+    def _stop_writer(self) -> None:
+        self._executor.shutdown(wait=True)  # bounded by the Jeff timeout; done-callbacks run before this returns
+        self._writes.put(None)
+
+    def _writer(self) -> None:
+        while (item := self._writes.get()) is not None:
+            where, record = item
+            try:
+                self._log.append(record)
+            except Exception as error:
+                self._warn(where, error)
+
+    def _write(self, where: str, record: dict[str, Any]) -> None:
+        try:
+            self._writes.put_nowait((where, record))
+        except queue.Full:
+            if "queue_full" in self._warned:
+                logger.debug("jeff_router: log writer still behind; record dropped")
+                return
+            self._warned.add("queue_full")
+            logger.warning("jeff_router: log writer is behind; dropping records (at most %d wait); later drops are "
+                           "logged at DEBUG", WRITE_QUEUE)
 
     def _route(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """Jeff-Code's thinking router, asked synchronously before the call. Never raises: None means "not asked"."""
         try:
-            level, result = ask_level(self._client, self._router_adapter, render_state(request.get("messages") or []),
-                                      self._router_threshold)
+            envelope = len(json.dumps(router_body(self._router_adapter, ""), ensure_ascii=False))
+            budget = self._max_request_chars - envelope
+            state = render_state(request.get("messages") or [], budget) if budget > 0 else None
+            if state is None:  # even the newest step and latest instruction don't fit: skip Jeff, keep thinking
+                return {"level": "xhigh", "outcome": "too_long", "ms": None, "attempts": 0, "probabilities": None}
+            level, result = ask_level(self._client, self._router_adapter, state, self._router_threshold)
             probabilities = (result.answers or {}).get("q", {}).get("probabilities") if result.outcome == "ok" else None
-            return {"level": level, "outcome": result.outcome, "ms": result.ms, "probabilities": probabilities}
+            return {"level": level, "outcome": result.outcome, "ms": result.ms, "attempts": result.attempts,
+                    "probabilities": probabilities}
         except Exception as error:
             self._warn("route", error)
             return None
@@ -236,14 +281,14 @@ class ShadowRouter:
             pending.future.add_done_callback(lambda future: self._complete(pending, future, action, context))
             return
         try:
-            self._log.append(self._record(pending, pending.outcome or "bad_response", None, action, context))
+            self._write("finish", self._record(pending, pending.outcome or "bad_response", None, action, context))
         except Exception as error:
             self._warn("finish", error)
 
     def _complete(self, pending: _Pending, future: Future, action: dict[str, Any] | None,
                   context: dict[str, Any]) -> None:
-        """Done-callback: runs in the pool thread when Jeff finishes, or inline if it already has. Appending is one
-        short write under the writers' flock (readers take no lock), so running inline does not stall the turn."""
+        """Done-callback: runs in the pool thread when Jeff finishes, or inline if it already has. It only builds the
+        record and queues it; the writer thread does the file I/O."""
         if future.cancelled():  # dropped by close(); nothing to compare
             return
         try:
@@ -252,7 +297,7 @@ class ShadowRouter:
                 outcome = result.outcome
             except Exception:
                 result, outcome = None, "bad_response"
-            self._log.append(self._record(pending, outcome, result, action, context))
+            self._write("complete", self._record(pending, outcome, result, action, context))
         except Exception as error:
             self._warn("complete", error)
 
@@ -284,7 +329,7 @@ class ShadowRouter:
             "jeff_ms": result.ms if result else None, "input_tokens": result.input_tokens if ok else None,
             "tool": tool_block, "read_target": read_block, "main": logged_action(action),
             "main_cost": pending.cost, "main_thinking": pending.main_thinking,
-            "router": pending.router, "guard": pending.guard,
+            "router": pending.router, "guard": pending.guard, "main_error": pending.main_error,
             "tool_match": tool_ok, "read_match": read_ok, "state": pending.state,
         }
 

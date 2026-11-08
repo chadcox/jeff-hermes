@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -17,6 +18,7 @@ class JeffResult:
     input_tokens: int | None = None
     ms: float | None = None
     detail: str = ""
+    attempts: int = 1
 
 
 def _http_outcome(code: int, body: str) -> str:
@@ -37,7 +39,8 @@ def _valid_answers(payload: Any) -> bool:
         probabilities = answer.get("probabilities") if isinstance(answer, dict) else None
         if not isinstance(probabilities, dict) or not probabilities:
             return False
-        if not all(isinstance(p, (int, float)) and not isinstance(p, bool) for p in probabilities.values()):
+        if not all(isinstance(p, (int, float)) and not isinstance(p, bool) and math.isfinite(p) and 0 <= p <= 1
+                   for p in probabilities.values()):
             return False
     return True
 

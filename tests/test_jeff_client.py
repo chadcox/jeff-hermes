@@ -117,3 +117,14 @@ def test_non_serializable_body_is_bad_request(fake_jeff):
     result = JeffClient(fake_jeff.url, 2.0).ask({**BODY, "state": {"user_message": object()}})
     assert result.outcome == "bad_request"
     assert fake_jeff.requests == []
+
+
+@pytest.mark.parametrize("p", [float("nan"), float("inf"), -0.1, 1.5, True], ids=["nan", "inf", "negative", "above_one", "bool"])
+def test_invalid_probability_is_bad_response(fake_jeff, p):
+    fake_jeff.reply = (200, ok_body({"tool": {"a": p, "b": 0.2}}))
+    assert JeffClient(fake_jeff.url, 2.0).ask(BODY).outcome == "bad_response"
+
+
+def test_boundary_probabilities_are_ok(fake_jeff):
+    fake_jeff.reply = (200, ok_body({"tool": {"a": 0, "b": 1.0}}))
+    assert JeffClient(fake_jeff.url, 2.0).ask(BODY).outcome == "ok"
