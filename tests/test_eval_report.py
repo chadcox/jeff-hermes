@@ -119,7 +119,7 @@ def test_run_archives_only_its_session_with_private_permissions(batch, monkeypat
             return SimpleNamespace(stdout="session_id: router\n", stderr="")
         if isinstance(args, list) and args[1] == str(EVAL / "grade.py"):
             return SimpleNamespace(stdout='{"passed": 1, "total": 1}')
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0, stdout="")
 
     monkeypatch.setattr(runner.subprocess, "run", fake_run)
     runner.run("router@0.6", "t3", "r1", out)
@@ -129,3 +129,60 @@ def test_run_archives_only_its_session_with_private_permissions(batch, monkeypat
     assert [c["api_call_count"] for c in saved] == [1, 2]
     assert all(c["session_id"] == "router" for c in saved)
     assert archive.stat().st_mode & 0o777 == 0o600
+
+
+def multi_task_batch(out, log, router_passes):
+    """Two tasks x four reps, on vs router; `router_passes(task, rep)` says whether the router run fully passed."""
+    rows, recs = [], []
+    for task in ("t1", "t2"):
+        for rep in range(4):
+            for mode in ("on", "router@0.6"):
+                session = f"{mode}-{task}-{rep}"
+                ok = True if mode == "on" else router_passes(task, rep)
+                rows.append({"model": "m", "mode": mode, "task": task, "rep": f"r{rep}", "session": session,
+                             "wall_s": 100 if mode == "on" else 50, "passed": 2 if ok else 0, "total": 2,
+                             "code": "abc1234"})
+                recs.append(record(session, tokens=100 if mode == "on" else 50))
+    write_records(out / "results.jsonl", rows)
+    write_records(log, recs)
+
+
+def decision(text):
+    return next(line for line in text.splitlines() if line.startswith("**Decision"))
+
+
+def test_bootstrap_resamples_tasks_not_reps(batch):
+    out, _, log = batch
+    multi_task_batch(out, log, lambda task, rep: task == "t1")  # t2 always fails under the router
+    line = decision(report(out))
+    assert "hidden-pass diff -0.500" in line
+    # every rep of a task moves together, so resampling tasks spans the whole range rather than shrinking around -0.5
+    assert "90% CI [-1.000, +0.000]" in line and "ROUTER DOES NOT CLEAR THE BAR" in line
+
+
+def test_report_shows_paired_outcomes_by_task(batch):
+    out, _, log = batch
+    multi_task_batch(out, log, lambda task, rep: not (task == "t2" and rep < 3))
+    text = report(out)
+    assert "Paired full passes (router@0.6 / on): both 5, router@0.6 only 0, on only 3, neither 0." in text
+    assert "Discordant by task (router@0.6 only / on only): t2 0/3." in text
+
+
+def test_report_shows_total_tokens_passing_latency_and_code_version(batch):
+    out, _, log = batch
+    multi_task_batch(out, log, lambda task, rep: rep != 0)
+    text = report(out)
+    assert "Code versions: abc1234 (16 runs)." in text
+    assert "| Total tok |" in text and "| Median wall, full passes |" in text
+    row = next(line for line in text.splitlines() if line.startswith("| router@0.6 |"))
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    assert cells[5] == "50s" and cells[13] == "800"  # 6 passing runs at 50s; 8 runs x 100 tokens
+
+
+def test_report_without_full_passes_shows_a_dash_and_unrecorded_code(batch):
+    out, rows, _ = batch
+    write_records(out / "results.jsonl", [{**r, "passed": 0} for r in rows])
+    text = report(out)
+    assert "Code versions: unrecorded (2 runs)." in text
+    row = next(line for line in text.splitlines() if line.startswith("| on |"))
+    assert [c.strip() for c in row.strip("|").split("|")][5] == "-"

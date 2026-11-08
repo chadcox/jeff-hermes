@@ -23,7 +23,7 @@ git -C "$EVAL" diff --quiet HEAD -- tasks || { echo "ABORT eval/tasks differs fr
 
 finish() {
   python3 "$EVAL/run.py" restore
-  chmod 755 "$EVAL/hidden" "$EVAL/ref" "$EVAL/tasks" "$OUT/runs" 2>/dev/null  # in case a run was killed mid-way
+  python3 "$EVAL/run.py" unlock "$OUT"  # in case a run was killed while the eval folders were locked
   $HERMES gateway stop --all -y > /dev/null 2>&1
   systemctl --user start hermes-gateway.service
   echo "HERMES_STARTED $(systemctl --user is-active hermes-gateway.service)"
@@ -86,7 +86,8 @@ for rep in $(seq "$MAX_REPS"); do
       restart_into "$mode" "$model"
       for task in "${todo[@]}"; do
         [ "$(date +%s)" -ge "$END" ] && { echo "END reached before rep $rep $model $mode $task"; exit 0; }
-        python3 "$EVAL/run.py" run "$mode" "$task" "r$rep" "$OUT"
+        python3 "$EVAL/run.py" run "$mode" "$task" "r$rep" "$OUT" \
+          || { echo "ABORT run.py run failed: $model $mode $task r$rep $(date -Is)"; exit 1; }
         # no session and no timeout = hermes never reached the model; two in a row means the gateway is down
         if tail -1 "$OUT/results.jsonl" | grep -q '"session": null, "wall_s": [0-9.]*, "timeout": false'; then
           dead=$((${dead:-0} + 1)); [ "$dead" -ge 2 ] && { echo "ABORT gateway unreachable $(date -Is)"; exit 1; }

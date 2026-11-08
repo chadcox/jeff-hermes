@@ -3,8 +3,8 @@
 Joins <outdir>/results.jsonl with the plugin's shadow log by session id, and applies the
 decision rule fixed before the run: the router wins on a model if, against always-think,
 its median wall time is <= 0.85x, its total tokens are lower, and the 90% bootstrap
-interval of the hidden-test pass fraction difference (router - on, paired by task and rep)
-has a lower bound above -0.05. A verdict requires contiguous call records ending in a
+interval of the hidden-test pass fraction difference (router - on, paired by task and rep, resampled
+by task because reps of one task are not independent) has a lower bound above -0.05. A verdict requires contiguous call records ending in a
 final reply and token usage for every call. New runs retain their own telemetry snapshots.
 """
 import collections, json, random, statistics as st, sys
@@ -64,10 +64,25 @@ def call_stats(rs):
     }
 
 
-def boot(diffs, n=10000, seed=0):
+def boot(groups, n=10000, seed=0):
+    """90% interval of the mean paired difference, resampling whole tasks: `groups` holds one list of diffs per task."""
     rnd = random.Random(seed)
-    m = sorted(st.mean(rnd.choices(diffs, k=len(diffs))) for _ in range(n))
+    m = sorted(st.mean([d for g in rnd.choices(groups, k=len(groups)) for d in g]) for _ in range(n))
     return m[int(0.05 * n)], m[int(0.95 * n) - 1]
+
+
+def paired_outcomes(pairs):
+    """Full passes per pair: both, router only, baseline only, neither; plus the tasks with discordant pairs."""
+    counts = collections.Counter((full(a), full(b)) for a, b in pairs)
+    split = collections.defaultdict(lambda: [0, 0])
+    for a, b in pairs:
+        if full(a) != full(b):
+            split[a["task"]][0 if full(a) else 1] += 1
+    return counts, dict(sorted(split.items()))
+
+
+def median_s(values):
+    return f"{st.median(values):.0f}s" if values else "-"
 
 
 def token_total(rs):
@@ -101,10 +116,12 @@ tasks = sorted({r["task"] for r in rows})
 
 print(f"# jeff_router A/B: {out.name}\n")
 print(f"{len(rows)} runs, {len(models)} models, tasks {', '.join(tasks)}.\n")
+codes = collections.Counter(r.get("code", "unrecorded") for r in rows)
+print("Code versions: " + ", ".join(f"{c} ({n} runs)" for c, n in sorted(codes.items())) + ".\n")
 for model in models:
     print(f"## {model}\n")
-    print("| Mode | Runs | Full passes | Hidden pass frac | Median wall | p90 wall | Timeouts | Tests edited | Calls | Thinking off | Prompt tok | Completion tok | Reasoning chars | Median Main ms/call | Median Jeff ms | Guards | Triggers |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| Mode | Runs | Full passes | Hidden pass frac | Median wall | Median wall, full passes | p90 wall | Timeouts | Tests edited | Calls | Thinking off | Prompt tok | Completion tok | Total tok | Reasoning chars | Median Main ms/call | Median Jeff ms | Guards | Triggers |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     stats = {}
     for mode in modes:
         rs = by.get((model, mode), [])
@@ -113,9 +130,10 @@ for model in models:
         s = call_stats(rs)
         stats[mode] = (rs, s)
         walls = [r["wall_s"] for r in rs]
-        print(f"| {mode} | {len(rs)} | {sum(map(full, rs))}/{len(rs)} | {st.mean(map(frac, rs)):.3f} | {st.median(walls):.0f}s | {p90(walls):.0f}s"
+        print(f"| {mode} | {len(rs)} | {sum(map(full, rs))}/{len(rs)} | {st.mean(map(frac, rs)):.3f} | {st.median(walls):.0f}s"
+              f" | {median_s([r['wall_s'] for r in rs if full(r)])} | {p90(walls):.0f}s"
               f" | {sum(bool(r.get('timeout')) for r in rs)} | {sum(bool(r.get('tests_touched')) for r in rs)} | {s['calls']}"
-              f" | {s['off']}/{s['calls']} | {s['prompt']:,} | {s['completion']:,} | {s['reasoning']:,}"
+              f" | {s['off']}/{s['calls']} | {s['prompt']:,} | {s['completion']:,} | {s['prompt'] + s['completion']:,} | {s['reasoning']:,}"
               f" | {st.median(s['main_ms']) if s['main_ms'] else 0:.0f} | {st.median(s['jeff_ms']) if s['jeff_ms'] else 0:.0f}"
               f" | {dict(s['guards']) or '-'} | {s['triggers']} |")
     print("\nPer task (full passes / runs, median wall):\n")
@@ -147,12 +165,20 @@ for model in models:
                       "with prompt and completion token counts on every call and no timeout.")
                 continue
             diffs = [frac(a) - frac(b) for a, b in pairs]
-            lo, hi = boot(diffs)
+            by_task = collections.defaultdict(list)
+            for (a, _), d in zip(pairs, diffs):
+                by_task[a["task"]].append(d)
+            lo, hi = boot(list(by_task.values()))
             wall_ratio = st.median(a["wall_s"] for a, _ in pairs) / st.median(b["wall_s"] for _, b in pairs)
             ok = wall_ratio <= 0.85 and tok_r < tok_o and lo > -0.05
             print(f"\n**Decision ({rm} vs on, {len(pairs)} paired runs):** median wall ratio {wall_ratio:.2f} (need <= 0.85), "
                   f"tokens {tok_r:,} vs {tok_o:,} (need lower), hidden-pass diff {st.mean(diffs):+.3f}, 90% CI [{lo:+.3f}, {hi:+.3f}] (need lower bound > -0.05). "
                   f"**{'ROUTER WINS' if ok else 'ROUTER DOES NOT CLEAR THE BAR'}**")
+            counts, split = paired_outcomes(pairs)
+            print(f"\nPaired full passes ({rm} / on): both {counts[(True, True)]}, {rm} only {counts[(True, False)]}, "
+                  f"on only {counts[(False, True)]}, neither {counts[(False, False)]}. "
+                  + ("Discordant by task (" + rm + " only / on only): "
+                     + ", ".join(f"{t} {x}/{y}" for t, (x, y) in split.items()) + "." if split else "No discordant pairs."))
             px = rs_["pxhigh"]
             if px:
                 print(f"\nCounterfactual thresholds over {len(px)} routed calls (share that would think): "
