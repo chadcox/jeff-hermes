@@ -175,8 +175,10 @@ for model in models:
             lo, hi = boot(list(by_task.values()))
             wall_ratio = st.median(a["wall_s"] for a, _ in pairs) / st.median(b["wall_s"] for _, b in pairs)
             ok = wall_ratio <= 0.85 and tok_r < tok_o and lo > -0.05
+            plural = "s" if timed_out > 1 else ""
+            left_out = f"; {timed_out} timed-out pair{plural} left out" if timed_out else ""
             print(f"\n**Decision ({rm} vs on, {len(pairs)} paired runs):** median wall ratio {wall_ratio:.2f} (need <= 0.85), "
-                  f"tokens {tok_r:,} vs {tok_o:,} (need lower{f'; {timed_out} timed-out pair{"s" if timed_out > 1 else ""} left out' if timed_out else ''}), hidden-pass diff {st.mean(diffs):+.3f}, 90% CI [{lo:+.3f}, {hi:+.3f}] (need lower bound > -0.05). "
+                  f"tokens {tok_r:,} vs {tok_o:,} (need lower{left_out}),hidden-pass diff {st.mean(diffs):+.3f}, 90% CI [{lo:+.3f}, {hi:+.3f}] (need lower bound > -0.05). "
                   f"**{'ROUTER WINS' if ok else 'ROUTER DOES NOT CLEAR THE BAR'}**")
             counts, split = paired_outcomes(pairs)
             print(f"\nPaired full passes ({rm} / on): both {counts[(True, True)]}, {rm} only {counts[(True, False)]}, "
