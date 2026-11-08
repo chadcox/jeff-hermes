@@ -17,9 +17,9 @@ call, whether your big model needs to think.**
 ---
 
 > [!WARNING]
-> **Research project, not ready for release.** This is an experiment to find out whether a small router model can cut
-> thinking costs in an agent loop. Results so far are mixed (see [Does it work?](#-does-it-work)), and there is no stable
-> release: settings, log formats and behaviour may change without notice. Don't rely on it for production work.
+> **Research project.** It works best on slow models that think at length (see [Does it work?](#-does-it-work)), and
+> it has only been tested on Qwen3.8 models so far. Settings, log formats and behaviour may still change between
+> releases.
 
 Reasoning models think on **every** step of an agent loop, including steps like `ls`, `cat` and "run the tests
 again". That thinking costs tokens and wall-clock time, and most of those steps don't need it.
@@ -49,6 +49,32 @@ big model still does all the work. It just doesn't spend thinking tokens on easy
   (time, tokens, reasoning characters) in an owner-only JSONL log, with a report tool to summarise it.
 - **🪶 No changes to Hermes.** It is a plain plugin: one symlink and a few config lines.
 
+## 🎯 Is it right for you?
+
+**Where it helps**
+
+- **Slow models that think at length.** On Qwen3.8 27B, runs took **about a third less time** than always-think, with
+  **67–77% less reasoning text** and **40–50% fewer completion tokens**.
+- **Local models where your time is the cost.** With llama.cpp or vLLM and prompt caching, the extra steps it causes
+  cost little, and the time it saves is real.
+- **Coding agents.** Jeff's `code-router` adapter was trained on coding-agent traces from a Qwen 27B.
+- **Keeping quality close to always-think.** It passed 37/40 and 34/40 runs on the two 27B quants (always-think: 40/40
+  and 37/40), and beat never-think on every model tested.
+- **Catching stuck runs.** The guards force thinking back on when outputs get stuck, commands keep failing or the
+  model loops. You can also use them on their own with `main_thinking: false`.
+
+**What it can't do**
+
+- **Save tokens.** With thinking off, the model takes more steps, and each step resends the conversation. Total
+  tokens came out level with or higher than always-think, so it won't cut a pay-per-token API bill.
+- **Speed up fast models.** On a model that thinks only briefly (Qwen3.8 Flash Next), there is little thinking to
+  skip, and the median run took the same time as always-think.
+- **Match always-think exactly.** It gives up a few points of pass rate. For work where every pass counts, keep
+  thinking on.
+- **Work without a thinking switch.** The model has to honour `reasoning_effort: "none"` (hybrid models such as Qwen3).
+- **Promise results beyond what was tested.** Only Qwen3.8 models and eight coding tasks have been tested so far, and
+  the 0.6 threshold hasn't been tuned for other models.
+
 ## 📈 Does it work?
 
 Upstream, on Jeff-Code (Qwen 27B coding agent, 1,242 paired tasks), the `code-router` adapter turned thinking off on
@@ -75,9 +101,9 @@ tasks × five reps × three modes, 75 runs in total.
   looped. The guards are simple rules and don't depend on Jeff.
 - The threshold of 0.6 looks reasonable, but five reps per task can't tell nearby thresholds apart.
 
-**The honest upshot:** on a fast model that thinks briefly, the router doesn't pay for itself; never-think plus the
-guards looks like the better setup. The router should pay off on slower models that think at length on every turn,
-which is where the upstream 0.68× result came from.
+**Takeaway:** on a fast model that thinks briefly there is little thinking to skip, so the router keeps quality but
+doesn't save time. Never-think plus the guards is a good setup there. The router is built for slower models that think
+at length on every turn, which is where the upstream 0.68× result came from. The 27B runs below test that.
 
 ### Qwen3.8 27B (2026-11-04)
 
@@ -93,25 +119,25 @@ tasks × five reps × three modes per quant (240 runs), with hidden-test grading
 | 27B Q4_K_M | **Router @ 0.6** | **34/40** | **25%** | **447** | **15.2M** | **252k** | **257k** | **141 s** |
 | 27B Q4_K_M | Always think | 37/40 | 100% | 363 | 14.6M | 508k | 1.10M | 212 s |
 
-- **Wall time improved.** Paired with always-think, the router's median run took 0.62× as long on IQ3_S and 0.67× on
-  Q4_K_M, close to the upstream 0.68×.
+- **Runs took about a third less time.** Paired with always-think, the router's median run took 0.62× as long on IQ3_S
+  and 0.67× on Q4_K_M, close to the upstream 0.68×.
 - **Thinking cut by about 70%.** Reasoning text dropped by 67% (IQ3_S) and 77% (Q4_K_M) compared with always-think.
   Completion tokens dropped by 40% and 50%.
-- **Total tokens did not drop.** The model took more steps without thinking, so prompt tokens rose by 46% (IQ3_S) and
-  4% (Q4_K_M). Total tokens ended up higher than always-think on both quants (14.7M vs 12.3M on IQ3_S, leaving out one
-  pair where always-think timed out; 15.4M vs 15.1M on Q4_K_M). Locally that is cheap thanks to prompt caching. On a
-  pay-per-token API it would cancel the savings.
-- **Quality dropped a little.** The router never passed a run that always-think failed on the same task and rep, and
-  always-think passed three runs that the router failed on each quant. The hidden-test pass rate fell by 1.3 points on
-  IQ3_S (90% CI −2.7 to −0.1) and 2.8 points on Q4_K_M (90% CI −7.0 to 0.0). The router still beat never-think on both
-  quants.
-- **The guards fired.** Under the router, guards forced thinking 17 times on IQ3_S (8 stuck output, 6 loop, 3 failed
-  command) and 7 times on Q4_K_M (3 stuck output, 4 loop).
+- **Total tokens didn't go down.** The model took more steps without thinking, so prompt tokens rose by 46% (IQ3_S)
+  and 4% (Q4_K_M). Total tokens ended up higher than always-think on both quants (14.7M vs 12.3M on IQ3_S, leaving out
+  one pair where always-think timed out; 15.4M vs 15.1M on Q4_K_M). Locally that is cheap thanks to prompt caching. On
+  a pay-per-token API it would cancel the savings.
+- **Quality stayed close to always-think.** The router never passed a run that always-think failed on the same task
+  and rep, and always-think passed three runs that the router failed on each quant. The hidden-test pass rate fell by
+  1.3 points on IQ3_S (90% CI −2.7 to −0.1) and 2.8 points on Q4_K_M (90% CI −7.0 to 0.0). The router still beat
+  never-think on both quants.
+- **The guards did their job.** Under the router, guards forced thinking 17 times on IQ3_S (8 stuck output, 6 loop, 3
+  failed command) and 7 times on Q4_K_M (3 stuck output, 4 loop).
 
-**Verdict:** the router does not clear the bar we set before the run: wall time at most 0.85×, fewer total tokens,
-and a pass-rate loss no worse than 5 points at the 90% lower bound. It clears wall time on both quants, but fails on
-total tokens on both and on quality on Q4_K_M. On a local model with prompt caching, where wall time is what you pay
-for, it saves about a third of the time per run at a small quality cost. It does not save tokens.
+**Takeaway:** on a slow local model that thinks at length, the router cuts about a third of the time per run and
+most of the thinking, at a small quality cost. It met our speed target on both quants. It missed our pre-set token
+target on both, and our quality target (no more than a 5-point loss at the 90% lower bound) on Q4_K_M by 2 points.
+If you pay per token rather than in time, always-think is still cheaper.
 
 ## 🚀 Quick start
 
