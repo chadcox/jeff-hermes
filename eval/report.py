@@ -157,12 +157,16 @@ for model in models:
             pairs = [(r, on_by[(r["task"], r["rep"])]) for r in rr if (r["task"], r["rep"]) in on_by]
             if not pairs:
                 continue
-            tok_r = token_total([a for a, _ in pairs])
-            tok_o = token_total([b for _, b in pairs])
+            # a timed-out run has no complete token count, so its pair is left out of the token comparison only;
+            # it still counts in the wall-time and pass comparisons
+            tok_pairs = [(a, b) for a, b in pairs if not a.get("timeout") and not b.get("timeout")]
+            timed_out = len(pairs) - len(tok_pairs)
+            tok_r = token_total([a for a, _ in tok_pairs]) if tok_pairs else None
+            tok_o = token_total([b for _, b in tok_pairs]) if tok_pairs else None
             if tok_r is None or tok_o is None:
                 print(f"\n**Decision ({rm} vs on, {len(pairs)} paired runs): INSUFFICIENT TELEMETRY.** "
-                      "Every paired run needs contiguous calls from 1 through a final stop reply, "
-                      "with prompt and completion token counts on every call and no timeout.")
+                      "Every paired run that didn't time out needs contiguous calls from 1 through a final stop reply, "
+                      "with prompt and completion token counts on every call.")
                 continue
             diffs = [frac(a) - frac(b) for a, b in pairs]
             by_task = collections.defaultdict(list)
@@ -172,7 +176,7 @@ for model in models:
             wall_ratio = st.median(a["wall_s"] for a, _ in pairs) / st.median(b["wall_s"] for _, b in pairs)
             ok = wall_ratio <= 0.85 and tok_r < tok_o and lo > -0.05
             print(f"\n**Decision ({rm} vs on, {len(pairs)} paired runs):** median wall ratio {wall_ratio:.2f} (need <= 0.85), "
-                  f"tokens {tok_r:,} vs {tok_o:,} (need lower), hidden-pass diff {st.mean(diffs):+.3f}, 90% CI [{lo:+.3f}, {hi:+.3f}] (need lower bound > -0.05). "
+                  f"tokens {tok_r:,} vs {tok_o:,} (need lower{f'; {timed_out} timed-out pair{"s" if timed_out > 1 else ""} left out' if timed_out else ''}), hidden-pass diff {st.mean(diffs):+.3f}, 90% CI [{lo:+.3f}, {hi:+.3f}] (need lower bound > -0.05). "
                   f"**{'ROUTER WINS' if ok else 'ROUTER DOES NOT CLEAR THE BAR'}**")
             counts, split = paired_outcomes(pairs)
             print(f"\nPaired full passes ({rm} / on): both {counts[(True, True)]}, {rm} only {counts[(True, False)]}, "

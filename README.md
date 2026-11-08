@@ -82,35 +82,36 @@ which is where the upstream 0.68× result came from.
 ### Qwen3.8 27B (2026-11-04)
 
 We then ran the same A/B on two quants of the dense Qwen3.8 27B, a slower model that thinks at length: eight coding
-tasks × two reps × three modes per quant, with hidden-test grading.
+tasks × five reps × three modes per quant (240 runs), with hidden-test grading.
 
 | Model | Mode | Runs fully passing | Thinking turns | Model calls | Prompt tokens | Completion tokens | Reasoning chars | Median wall time per run |
 |---|---|---|---|---|---|---|---|---|
-| 27B IQ3_S | Never think | 13/16 | 0% | 192 | 6.1M | 66k | 0 | 71 s |
-| 27B IQ3_S | **Router @ 0.6** | **15/16** | **22%** | **204** | **6.9M** | **122k** | **137k** | **83 s** |
-| 27B IQ3_S | Always think | 16/16 | 100% | 127 | 4.4M | 191k | 425k | 141 s |
-| 27B Q4_K_M | Never think | 16/22 ¹ | 0% | 328 | 11.7M | 113k | 0 | 131 s |
-| 27B Q4_K_M | **Router @ 0.6** | **12/16** | **22%** | **188** | **6.9M** | **108k** | **112k** | **118 s** |
-| 27B Q4_K_M | Always think | 14/16 | 100% | 140 | 5.8M | 188k | 409k | 212 s |
+| 27B IQ3_S | Never think | 33/40 | 0% | 683 | 32.2M | 262k | 0 | 60 s |
+| 27B IQ3_S | **Router @ 0.6** | **37/40** | **19%** | **496** | **17.3M** | **292k** | **352k** | **87 s** |
+| 27B IQ3_S | Always think | 40/40 | 100% | 331 | 11.8M | 483k | 1.08M | 141 s |
+| 27B Q4_K_M | Never think | 31/40 | 0% | 587 | 20.5M | 204k | 0 | 131 s |
+| 27B Q4_K_M | **Router @ 0.6** | **34/40** | **25%** | **447** | **15.2M** | **252k** | **257k** | **141 s** |
+| 27B Q4_K_M | Always think | 37/40 | 100% | 363 | 14.6M | 508k | 1.10M | 212 s |
 
-¹ Never-think on Q4_K_M got an extra rep on six tasks. On the first two reps only, it is 12/16 with a 146 s median.
+- **Wall time improved.** Paired with always-think, the router's median run took 0.62× as long on IQ3_S and 0.67× on
+  Q4_K_M, close to the upstream 0.68×.
+- **Thinking cut by about 70%.** Reasoning text dropped by 67% (IQ3_S) and 77% (Q4_K_M) compared with always-think.
+  Completion tokens dropped by 40% and 50%.
+- **Total tokens did not drop.** The model took more steps without thinking, so prompt tokens rose by 46% (IQ3_S) and
+  4% (Q4_K_M). Total tokens ended up higher than always-think on both quants (14.7M vs 12.3M on IQ3_S, leaving out one
+  pair where always-think timed out; 15.4M vs 15.1M on Q4_K_M). Locally that is cheap thanks to prompt caching. On a
+  pay-per-token API it would cancel the savings.
+- **Quality dropped a little.** The router never passed a run that always-think failed on the same task and rep, and
+  always-think passed three runs that the router failed on each quant. The hidden-test pass rate fell by 1.3 points on
+  IQ3_S (90% CI −2.7 to −0.1) and 2.8 points on Q4_K_M (90% CI −7.0 to 0.0). The router still beat never-think on both
+  quants.
+- **The guards fired.** Under the router, guards forced thinking 17 times on IQ3_S (8 stuck output, 6 loop, 3 failed
+  command) and 7 times on Q4_K_M (3 stuck output, 4 loop).
 
-- **Wall time improved this time.** On both quants the router's median run took about 0.6× as long as always-think's
-  (83 s vs 141 s, 118 s vs 212 s). This is close to the upstream 0.68×.
-- **Thinking cut by about 70%.** Reasoning text dropped by 68% (IQ3_S) and 73% (Q4_K_M) compared with always-think.
-  Completion tokens dropped by 36% and 43%.
-- **Prompt tokens still rose.** As on Flash Next, the model took more steps without thinking, so prompt tokens rose by
-  57% (IQ3_S) and 19% (Q4_K_M). Locally that is cheap thanks to prompt caching. On a pay-per-token API it would eat into
-  the savings.
-- **Quality is mixed.** On IQ3_S the router was close to always-think (15/16 vs 16/16) and ahead of never-think. On
-  Q4_K_M it trailed always-think (12/16 vs 14/16) and matched never-think on matched reps. Two reps per task is too
-  few to tell whether that gap is real.
-- **The guards fired.** Under the router, the loop guard fired three times on each quant, and on IQ3_S the stuck-output
-  and failed-command guards fired eight more times. Never-think on IQ3_S had one run hit the timeout.
-
-**Upshot so far:** on a slow model that thinks at length, the router saves real time (about 40% per run) and most of
-the thinking, at a quality cost that is small on one quant and unclear on the other. More reps are needed before
-calling it.
+**Verdict:** the router does not clear the bar we set before the run: wall time at most 0.85×, fewer total tokens,
+and a pass-rate loss no worse than 5 points at the 90% lower bound. It clears wall time on both quants, but fails on
+total tokens on both and on quality on Q4_K_M. On a local model with prompt caching, where wall time is what you pay
+for, it saves about a third of the time per run at a small quality cost. It does not save tokens.
 
 ## 🚀 Quick start
 

@@ -84,7 +84,7 @@ def test_out_of_order_calls_and_zero_usage_are_valid(batch):
     assert "ROUTER WINS" in report(out)
 
 
-def test_timeout_cannot_win(batch):
+def test_timeout_cannot_win_when_no_pair_is_left(batch):
     out, rows, _ = batch
     rows[1]["timeout"] = True
     write_records(out / "results.jsonl", rows)
@@ -186,3 +186,19 @@ def test_report_without_full_passes_shows_a_dash_and_unrecorded_code(batch):
     assert "Code versions: unrecorded (2 runs)." in text
     row = next(line for line in text.splitlines() if line.startswith("| on |"))
     assert [c.strip() for c in row.strip("|").split("|")][5] == "-"
+
+
+def test_timed_out_pair_is_left_out_of_tokens_only(batch):
+    out, _, log = batch
+    multi_task_batch(out, log, lambda task, rep: True)
+    rows = [json.loads(line) for line in (out / "results.jsonl").read_text().splitlines()]
+    slow = next(r for r in rows if r["mode"] == "on" and r["task"] == "t1" and r["rep"] == "r0")
+    slow["timeout"] = True
+    write_records(out / "results.jsonl", rows)
+    # the timed-out run never logged a final stop reply
+    recs = [json.loads(line) for line in log.read_text().splitlines()]
+    write_records(log, [r for r in recs if r["session_id"] != slow["session"]] + [record(slow["session"], finish="length")])
+    line = decision(report(out))
+    assert "8 paired runs" in line
+    assert "tokens 700 vs 1,400 (need lower; 1 timed-out pair left out)" in line
+    assert "ROUTER WINS" in line

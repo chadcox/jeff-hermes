@@ -1,6 +1,6 @@
 manifest_version: 2
 name: jeff_router
-version: "0.1.0"
+version: "0.2.0"
 requires_hermes: ">=0.23.0"
 description: "Asks Jeff (a 0.8B model on jeff-serve) before each main-turn model call whether the agent needs to think, and turns thinking off when it does not. Also logs Jeff's view of each call beside the main model's actual action. Port of Jeff-Code's thinking router."
 kind: standalone
